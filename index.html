@@ -310,9 +310,23 @@ survives redeploys).
       <button class="btn btn-outline-secondary" onclick="clearAllFilters()" title="Clear filters"><i class="bi bi-x-circle"></i></button>
 
       <div class="ms-auto d-flex gap-2">
-        <button class="btn btn-outline-secondary" onclick="exportBackup()"><i class="bi bi-download me-1"></i>Export</button>
-        <button class="btn btn-outline-secondary" onclick="document.getElementById('restoreFile').click()"><i class="bi bi-upload me-1"></i>Import</button>
+        <div class="dropdown">
+          <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown"><i class="bi bi-download me-1"></i>Export</button>
+          <ul class="dropdown-menu dropdown-menu-end">
+            <li><a class="dropdown-item" href="#" onclick="exportExcel();return false;"><i class="bi bi-file-earmark-spreadsheet me-2"></i>Excel (.xlsx)</a></li>
+            <li><a class="dropdown-item" href="#" onclick="exportCsv();return false;"><i class="bi bi-filetype-csv me-2"></i>CSV</a></li>
+            <li><a class="dropdown-item" href="#" onclick="exportBackup();return false;"><i class="bi bi-braces me-2"></i>JSON backup (full history)</a></li>
+          </ul>
+        </div>
+        <div class="dropdown">
+          <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown"><i class="bi bi-upload me-1"></i>Import</button>
+          <ul class="dropdown-menu dropdown-menu-end">
+            <li><a class="dropdown-item" href="#" onclick="document.getElementById('sheetImportFile').click();return false;"><i class="bi bi-file-earmark-spreadsheet me-2"></i>Excel / CSV</a></li>
+            <li><a class="dropdown-item" href="#" onclick="document.getElementById('restoreFile').click();return false;"><i class="bi bi-braces me-2"></i>JSON backup (replaces everything)</a></li>
+          </ul>
+        </div>
         <input type="file" id="restoreFile" accept=".json" class="d-none">
+        <input type="file" id="sheetImportFile" accept=".xlsx,.xls,.csv" class="d-none">
         <button class="btn btn-grad" data-bs-toggle="modal" data-bs-target="#deviceModal" onclick="openAddDevice()"><i class="bi bi-plus-lg me-1"></i>Add device</button>
       </div>
     </div>
@@ -406,10 +420,10 @@ survives redeploys).
     </div>
 
     <div id="admin-tab-backup" class="d-none">
-      <p class="text-faint small">Download a full JSON backup, or restore the entire inventory from one.</p>
-      <button class="btn btn-outline-secondary w-100 mb-2" onclick="exportBackup()"><i class="bi bi-download me-1"></i>Export all devices</button>
-      <button class="btn btn-outline-danger w-100" onclick="document.getElementById('restoreFile').click()"><i class="bi bi-upload me-1"></i>Restore from backup</button>
-      <div class="alert alert-warning small mt-3 mb-0"><i class="bi bi-exclamation-triangle me-1"></i>Restoring replaces the entire inventory.</div>
+      <p class="text-faint small">Looking for Excel/CSV import or export? Everyone has that in the toolbar's Export/Import menus. This is the full-fidelity JSON backup — it includes check-out history and is meant for disaster recovery, not everyday spreadsheet work.</p>
+      <button class="btn btn-outline-secondary w-100 mb-2" onclick="exportBackup()"><i class="bi bi-download me-1"></i>Export JSON backup</button>
+      <button class="btn btn-outline-danger w-100" onclick="document.getElementById('restoreFile').click()"><i class="bi bi-upload me-1"></i>Restore from JSON backup</button>
+      <div class="alert alert-warning small mt-3 mb-0"><i class="bi bi-exclamation-triangle me-1"></i>Restoring <strong>replaces the entire inventory</strong> — unlike the Excel/CSV import, which only adds.</div>
     </div>
   </div>
 </div>
@@ -520,6 +534,32 @@ survives redeploys).
   </div>
 </div>
 
+<!-- ===================== SHEET IMPORT PREVIEW MODAL ===================== -->
+<div class="modal fade" id="importPreviewModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Import from spreadsheet</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <p class="text-faint small mb-3">
+          Found <strong id="importPreviewCount">0</strong> row(s) with a device name.
+          Existing devices are never touched — this only <em>adds</em> new ones.
+          Rows with no Device ID get one auto-numbered; rows with no owner are marked "Unassigned".
+        </p>
+        <div class="table-responsive">
+          <table class="table table-sm">
+            <thead><tr class="small text-faint"><th>Device</th><th>Type</th><th>Owner</th><th>Team</th></tr></thead>
+            <tbody id="importPreviewBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-grad" id="importConfirmBtn" onclick="confirmSheetImport()">Import devices</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ===================== DELETE CONFIRM MODAL ===================== -->
 <div class="modal fade" id="deleteModal" tabindex="-1">
   <div class="modal-dialog">
@@ -537,6 +577,7 @@ survives redeploys).
 <!-- ===================== TOASTS ===================== -->
 <div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index:2000" id="toastWrap"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
 <script>
 /* =====================================================================
@@ -741,6 +782,7 @@ window.addEventListener('load', () => {
     });
   });
   document.getElementById('restoreFile').addEventListener('change', handleRestoreFile);
+  document.getElementById('sheetImportFile').addEventListener('change', handleSheetImportFile);
   document.querySelectorAll('#adminTabs button').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('#adminTabs button').forEach(b => b.classList.remove('active'));
@@ -1341,7 +1383,7 @@ async function saveAdminConfig() {
 }
 
 /* =====================================================================
-   BACKUP / RESTORE
+   BACKUP / RESTORE (JSON — full fidelity, includes history)
    ===================================================================== */
 function exportBackup() {
   const blob = new Blob([JSON.stringify(devices, null, 2)], { type: 'application/json' });
@@ -1367,6 +1409,168 @@ function handleRestoreFile(e) {
   };
   reader.readAsText(file);
   e.target.value = '';
+}
+
+/* =====================================================================
+   EXPORT TO EXCEL / CSV — readable spreadsheet export for reporting,
+   sharing, or editing outside the app. (Use JSON backup above instead
+   if you need a byte-for-byte restore including check-out history.)
+   ===================================================================== */
+function deviceExportRows() {
+  return devices.map(d => {
+    const row = {
+      'Device': d.name || '',
+      'Type': d.type || '',
+      'Device ID': d.deviceId || '',
+      'Default Owner': d.assigned || '',
+      'Team': d.team || '',
+      'In Charge': d.inCharge || '',
+      'Person Using': d.personUsing || '',
+      'Tier': d.tier || '',
+      'Model Name': d.modelName || '',
+      'OS Version': d.osVersion || '',
+      'RAM Size': d.ramSize || '',
+      'Internal Memory': d.internalMemory || '',
+      'GPU': d.gpu || '',
+      'Serial No': d.serialNo || '',
+      'IMEI': d.imei || '',
+      'Status': d.status === 'in' ? 'Checked in' : 'Checked out',
+      'Holder': d.holder || '',
+      'Purpose': d.purpose || '',
+      'Notes': d.notes || '',
+      'Created': d.created ? formatDate(d.created) : '',
+      'Last Checked In': d.lastCheckedIn ? formatDate(d.lastCheckedIn) : '',
+      'Last Checked Out': d.lastCheckedOut ? formatDate(d.lastCheckedOut) : ''
+    };
+    (serverConfig.customFields || []).forEach(f => { row[f.label] = (d.custom && d.custom[f.key]) || ''; });
+    return row;
+  });
+}
+function exportExcel() {
+  if (!devices.length) { toast('No devices to export.', true); return; }
+  if (typeof XLSX === 'undefined') { toast('Excel library failed to load — try the CSV or JSON export instead.', true); return; }
+  const rows = deviceExportRows();
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = Object.keys(rows[0]).map(() => ({ wch: 18 }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Devices');
+  XLSX.writeFile(wb, `qa-device-inventory-${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+function exportCsv() {
+  if (!devices.length) { toast('No devices to export.', true); return; }
+  const rows = deviceExportRows();
+  const headers = Object.keys(rows[0]);
+  const cell = v => '"' + String(v || '').replace(/"/g, '""') + '"';
+  const csv = [headers.map(cell).join(',')].concat(rows.map(r => headers.map(h => cell(r[h])).join(','))).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `qa-device-inventory-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* =====================================================================
+   IMPORT FROM EXCEL / CSV — adds new devices, never touches existing ones.
+   Column headers are matched flexibly (case/spacing-insensitive, several
+   aliases per field) so a sheet doesn't need to match our exact labels.
+   ===================================================================== */
+let sheetImportRows = [];
+
+function fieldFromRow(row, aliases) {
+  const keys = Object.keys(row);
+  for (const alias of aliases) {
+    const norm = alias.toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (const k of keys) {
+      if (k.toLowerCase().replace(/[^a-z0-9]/g, '') === norm) return String(row[k] || '').trim();
+    }
+  }
+  return '';
+}
+
+function parseCsvText(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g, '').trim());
+  return lines.slice(1).map(line => {
+    const vals = line.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(v => v.replace(/^"|"$/g, '').trim());
+    const row = {};
+    headers.forEach((h, i) => { row[h] = vals[i] || ''; });
+    return row;
+  });
+}
+
+function handleSheetImportFile(e) {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+    if (typeof XLSX === 'undefined') { toast('Excel library failed to load — try again in a moment.', true); return; }
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const wb = XLSX.read(ev.target.result, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        parseImportRows(XLSX.utils.sheet_to_json(ws, { defval: '' }));
+      } catch (err) { toast('Could not read that Excel file: ' + err.message, true); }
+    };
+    reader.readAsArrayBuffer(file);
+  } else if (name.endsWith('.csv')) {
+    const reader = new FileReader();
+    reader.onload = ev => parseImportRows(parseCsvText(ev.target.result));
+    reader.readAsText(file);
+  } else {
+    toast('Please choose a .xlsx, .xls, or .csv file.', true);
+  }
+}
+
+function parseImportRows(rawRows) {
+  sheetImportRows = rawRows.map(row => ({
+    name: fieldFromRow(row, ['device', 'devicename', 'name', 'model']),
+    type: fieldFromRow(row, ['type']) || 'Other',
+    deviceId: fieldFromRow(row, ['deviceid', 'id', 'assettag']),
+    assigned: fieldFromRow(row, ['defaultowner', 'owner', 'assigned']) || 'Unassigned',
+    team: fieldFromRow(row, ['team']),
+    inCharge: fieldFromRow(row, ['incharge']),
+    personUsing: fieldFromRow(row, ['personusing', 'currentuser', 'usedby']),
+    tier: fieldFromRow(row, ['tier']),
+    modelName: fieldFromRow(row, ['modelname']),
+    osVersion: fieldFromRow(row, ['osversion', 'os']),
+    ramSize: fieldFromRow(row, ['ramsize', 'ram']),
+    internalMemory: fieldFromRow(row, ['internalmemory', 'memory', 'storage']),
+    gpu: fieldFromRow(row, ['gpu']),
+    serialNo: fieldFromRow(row, ['serialno', 'serial', 'serialnumber']),
+    imei: fieldFromRow(row, ['imei']),
+    notes: fieldFromRow(row, ['notes'])
+  })).filter(r => r.name);
+
+  if (!sheetImportRows.length) {
+    toast('No rows with a recognizable Device name found — check the column headers.', true);
+    return;
+  }
+  document.getElementById('importPreviewCount').textContent = sheetImportRows.length;
+  document.getElementById('importPreviewBody').innerHTML = sheetImportRows.slice(0, 10).map(r => `
+    <tr><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.type)}</td><td>${escapeHtml(r.assigned)}</td><td>${escapeHtml(r.team || '—')}</td></tr>`).join('')
+    + (sheetImportRows.length > 10 ? `<tr><td colspan="4" class="text-faint small">…and ${sheetImportRows.length - 10} more</td></tr>` : '');
+  new bootstrap.Modal(document.getElementById('importPreviewModal')).show();
+}
+
+async function confirmSheetImport() {
+  const btn = document.getElementById('importConfirmBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Importing…';
+  let ok = 0, failed = 0;
+  for (const row of sheetImportRows) {
+    try { await apiFetch('/api/devices', { method: 'POST', body: JSON.stringify(row) }); ok++; }
+    catch (e) { failed++; }
+  }
+  btn.disabled = false;
+  btn.textContent = 'Import devices';
+  bootstrap.Modal.getInstance(document.getElementById('importPreviewModal'))?.hide();
+  toast(`Imported ${ok} device${ok !== 1 ? 's' : ''}` + (failed ? `, ${failed} failed` : '') + '.', failed > 0 && ok === 0);
+  sheetImportRows = [];
+  await loadDevices();
 }
 
 /* =====================================================================
