@@ -908,9 +908,9 @@ function renderStats() {
   const outCount = total - inCount;
   const overdue = devices.filter(isOverdue).length;
   const cards = [
-    ['Total devices', total, 'text-white'],
+    ['Total devices', total, 'text-body-emphasis'],
     ['Checked in', inCount, 'text-success'],
-    ['Checked out', outCount, 'text-white'],
+    ['Checked out', outCount, 'text-body-emphasis'],
     ['Overdue (48h+)', overdue, 'text-warning']
   ];
   document.getElementById('statsRow').innerHTML = cards.map(([label, val, cls]) => `
