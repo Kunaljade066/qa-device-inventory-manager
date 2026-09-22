@@ -710,9 +710,14 @@ function updateUiModeBtn() {
 window.addEventListener('load', () => {
   updateColorThemeBtn();
   updateUiModeBtn();
-  initGoogleWhenReady(20);
   if (session && session.token) {
     showApp();
+  } else {
+    // Only bother initializing Google Sign-In (including its One Tap prompt)
+    // when we don't already have a valid local session — otherwise returning
+    // users see Google's own prompt pop up on every visit, which looks like
+    // being logged out even when the session is perfectly fine.
+    initGoogleWhenReady(20);
   }
   ['mousemove','keydown','click','touchstart'].forEach(evt =>
     document.addEventListener(evt, () => lastInteraction = Date.now(), { passive: true })
