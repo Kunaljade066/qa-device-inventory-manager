@@ -175,8 +175,6 @@ survives redeploys).
   .modal-header { border-bottom-color: var(--bs-border-color); }
   .modal-footer { border-top-color: var(--bs-border-color); }
   .btn-icon { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
-  #bulkBar { display: none; }
-  #bulkBar.show { display: flex; }
   .cursor-pointer { cursor: pointer; }
   .field-section-label { font-family: var(--mono); font-size: .68rem; letter-spacing: 1.5px; text-transform: uppercase; color: var(--cyan); margin: 14px 0 8px; }
   .field-section-label:first-child { margin-top: 0; }
@@ -263,7 +261,7 @@ survives redeploys).
     <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
       <div class="position-relative flex-grow-1" style="min-width:220px;max-width:360px">
         <i class="bi bi-search position-absolute text-faint" style="left:12px;top:50%;transform:translateY(-50%)"></i>
-        <input type="search" id="searchInput" class="form-control ps-5" placeholder="Search device, owner, team, ID, serial, IMEI…">
+        <input type="search" id="searchInput" class="form-control ps-5" placeholder="Search anything — specs, owner, RAM, serial, IMEI…">
       </div>
 
       <div class="btn-group" role="group" id="statusFilterTabs">
@@ -297,6 +295,18 @@ survives redeploys).
         </button>
         <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-tier-menu"></div>
       </div>
+      <div class="dropdown" id="mf-osVersion">
+        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+          OS <span class="badge badge-soft-info ms-1 d-none" id="mf-osVersion-badge"></span>
+        </button>
+        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-osVersion-menu"></div>
+      </div>
+      <div class="dropdown" id="mf-modelName">
+        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+          Model <span class="badge badge-soft-info ms-1 d-none" id="mf-modelName-badge"></span>
+        </button>
+        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-modelName-menu"></div>
+      </div>
       <button class="btn btn-outline-secondary" onclick="clearAllFilters()" title="Clear filters"><i class="bi bi-x-circle"></i></button>
 
       <div class="ms-auto d-flex gap-2">
@@ -307,21 +317,12 @@ survives redeploys).
       </div>
     </div>
 
-    <!-- BULK ACTION BAR (admin) -->
-    <div id="bulkBar" class="alert alert-secondary d-flex align-items-center gap-2 flex-wrap mb-3 py-2">
-      <span class="mono small" id="bulkCount">0 selected</span>
-      <button class="btn btn-sm btn-outline-light" onclick="bulkCheckin()"><i class="bi bi-box-arrow-in-down"></i> Check in selected</button>
-      <button class="btn btn-sm btn-outline-danger" onclick="bulkDelete()"><i class="bi bi-trash"></i> Delete selected</button>
-      <button class="btn btn-sm btn-outline-light ms-auto" onclick="clearBulkSelection()">Clear</button>
-    </div>
-
     <!-- TABLE -->
     <div class="card bg-body-secondary border-secondary-subtle">
       <div class="table-responsive">
         <table class="table table-glow align-middle mb-0" id="deviceTable">
           <thead>
             <tr class="mono small text-uppercase text-faint">
-              <th style="width:34px" id="bulkSelectTh"></th>
               <th class="cursor-pointer" data-sort="name">Device</th>
               <th class="cursor-pointer" data-sort="deviceId">Device ID</th>
               <th class="cursor-pointer" data-sort="team">Team</th>
@@ -429,7 +430,7 @@ survives redeploys).
           <div class="col-md-3"><label class="form-label small text-faint mono">Type</label>
             <select class="form-select" id="f-type"></select></div>
           <div class="col-md-3"><label class="form-label small text-faint mono">Device ID</label>
-            <input class="form-control" id="f-deviceId" placeholder="Asset tag"></div>
+            <input class="form-control" id="f-deviceId" placeholder="Leave blank to auto-number (DEV-0001)"></div>
         </div>
         <div class="field-section-label">Ownership</div>
         <div class="row g-3 mb-2">
@@ -562,13 +563,12 @@ let adminDraft = null; // staged edits while offcanvas is open
 let session = loadSession();
 let sortState = { key: 'name', dir: 1 };
 let statusFilter = 'all';
-const MF_STATE = { type: new Set(), team: new Set(), inCharge: new Set(), tier: new Set() };
+const MF_STATE = { type: new Set(), team: new Set(), inCharge: new Set(), tier: new Set(), osVersion: new Set(), modelName: new Set() };
 let searchTerm = '';
 let pollTimer = null;
 let lastInteraction = Date.now();
 let lastSyncAt = null;
 let pendingCheckoutId = null, pendingEditId = null, pendingDeleteId = null;
-let bulkSelected = new Set();
 let gsiInited = false;
 
 /* =====================================================================
@@ -779,8 +779,6 @@ function updateRoleUI() {
   roleBadge.textContent = (session.user.role || 'member').toUpperCase();
   roleBadge.classList.remove('d-none');
   document.getElementById('adminHamburgerBtn').classList.toggle('d-none', session.user.role !== 'admin');
-  document.getElementById('bulkSelectTh').innerHTML = session.user.role === 'admin'
-    ? '<input type="checkbox" class="form-check-input" id="bulkSelectAll" onclick="toggleSelectAll(event)">' : '';
 }
 
 // Asks the server what our role ACTUALLY is right now (server-computed from
@@ -941,9 +939,14 @@ function getFiltered() {
     if (MF_STATE.team.size && !MF_STATE.team.has(d.team || '')) return false;
     if (MF_STATE.inCharge.size && !MF_STATE.inCharge.has(d.inCharge || '')) return false;
     if (MF_STATE.tier.size && !MF_STATE.tier.has(d.tier || '')) return false;
+    if (MF_STATE.osVersion.size && !MF_STATE.osVersion.has(d.osVersion || '')) return false;
+    if (MF_STATE.modelName.size && !MF_STATE.modelName.has(d.modelName || '')) return false;
     if (searchTerm) {
-      const hay = [d.name, d.assigned, d.holder, d.notes, d.deviceId, d.team, d.inCharge, d.personUsing, d.modelName, d.serialNo, d.imei, d.tier]
-        .concat(Object.values(d.custom || {})).filter(Boolean).join(' ').toLowerCase();
+      const hay = [
+        d.name, d.type, d.assigned, d.holder, d.purpose, d.notes, d.status,
+        d.deviceId, d.team, d.inCharge, d.personUsing, d.tier,
+        d.modelName, d.osVersion, d.ramSize, d.internalMemory, d.gpu, d.serialNo, d.imei
+      ].concat(Object.values(d.custom || {})).filter(Boolean).join(' ').toLowerCase();
       if (!hay.includes(searchTerm.toLowerCase())) return false;
     }
     return true;
@@ -970,7 +973,7 @@ function renderTable() {
   const isAdmin = session && session.user.role === 'admin';
 
   if (!list.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-faint py-5">
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center text-faint py-5">
       <i class="bi bi-inbox fs-1 d-block mb-2 opacity-50"></i>
       ${devices.length === 0 ? 'No devices yet — add the first one.' : 'Nothing matches your search or filter.'}
     </td></tr>`;
@@ -1003,7 +1006,6 @@ function rowHtml(d, isAdmin) {
   const specs = specsPreview(d);
 
   return `<tr data-id="${d.id}">
-    <td>${isAdmin ? `<input type="checkbox" class="form-check-input bulk-row-cb" data-id="${d.id}" ${bulkSelected.has(d.id) ? 'checked' : ''} onclick="toggleBulkOne('${d.id}')">` : ''}</td>
     <td>
       <div class="fw-semibold">${escapeHtml(d.name)}${d.tier ? `<span class="badge badge-soft-info ms-1" style="font-size:.62rem">${escapeHtml(d.tier)}</span>` : ''}</div>
       <div class="specs-line">${escapeHtml(d.type || 'Other')}${specs ? ' · ' + escapeHtml(specs) : ''}</div>
@@ -1034,7 +1036,7 @@ function rowHtml(d, isAdmin) {
    MULTI-SELECT FILTER DROPDOWNS
    ===================================================================== */
 function populateFilterDropdowns() {
-  const fields = { type: 'type', team: 'team', inCharge: 'inCharge', tier: 'tier' };
+  const fields = { type: 'type', team: 'team', inCharge: 'inCharge', tier: 'tier', osVersion: 'osVersion', modelName: 'modelName' };
   Object.keys(fields).forEach(key => {
     const menu = document.getElementById('mf-' + key + '-menu');
     let values;
@@ -1062,7 +1064,7 @@ function toggleMF(key, val) {
 function clearAllFilters() {
   Object.keys(MF_STATE).forEach(k => MF_STATE[k].clear());
   document.querySelectorAll('.mono.ms-1.badge-soft-info').forEach(b => {});
-  ['type','team','inCharge','tier'].forEach(k => {
+  ['type','team','inCharge','tier','osVersion','modelName'].forEach(k => {
     const badge = document.getElementById('mf-' + k + '-badge');
     if (badge) { badge.textContent = ''; badge.classList.add('d-none'); }
   });
@@ -1259,47 +1261,6 @@ async function confirmDelete() {
     toast('Device deleted.');
     await loadDevices();
   } catch (e) { toast(e.message, true); }
-}
-
-/* =====================================================================
-   BULK SELECTION (admin)
-   ===================================================================== */
-function toggleBulkOne(id) {
-  if (bulkSelected.has(id)) bulkSelected.delete(id); else bulkSelected.add(id);
-  updateBulkBar();
-}
-function toggleSelectAll(e) {
-  const ids = getFiltered().map(d => d.id);
-  if (e.target.checked) ids.forEach(id => bulkSelected.add(id));
-  else ids.forEach(id => bulkSelected.delete(id));
-  renderTable();
-  updateBulkBar();
-}
-function clearBulkSelection() { bulkSelected.clear(); renderTable(); updateBulkBar(); }
-function updateBulkBar() {
-  const bar = document.getElementById('bulkBar');
-  document.getElementById('bulkCount').textContent = bulkSelected.size + ' selected';
-  bar.classList.toggle('show', bulkSelected.size > 0);
-}
-async function bulkDelete() {
-  if (!bulkSelected.size) return;
-  if (!confirm(`Delete ${bulkSelected.size} device(s)? This can't be undone.`)) return;
-  try {
-    await apiFetch('/api/devices/bulk-delete', { method: 'POST', body: JSON.stringify({ ids: [...bulkSelected] }) });
-    toast(bulkSelected.size + ' device(s) deleted.');
-    clearBulkSelection();
-    await loadDevices();
-  } catch (e) { toast(e.message, true); }
-}
-async function bulkCheckin() {
-  if (!bulkSelected.size) return;
-  let ok = 0;
-  for (const id of bulkSelected) {
-    try { await apiFetch(`/api/devices/${id}/checkin`, { method: 'POST' }); ok++; } catch (e) {}
-  }
-  toast(ok + ' device(s) checked in.');
-  clearBulkSelection();
-  await loadDevices();
 }
 
 /* =====================================================================
