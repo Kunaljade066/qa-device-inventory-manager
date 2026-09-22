@@ -4,6 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>QA Device Inventory · Hitwicket</title>
+<script>
+  // Apply the saved UI mode before first paint to avoid a flash of the wrong look.
+  // Default is "simple" (clean, readable) — users can switch to "fancy" (neon/mono) from the navbar.
+  try { document.documentElement.setAttribute('data-ui', localStorage.getItem('ui_mode') || 'simple'); } catch (e) {}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -59,6 +64,18 @@ survives redeploys).
     --disp: 'Orbitron', sans-serif;
     --mono: 'JetBrains Mono', monospace;
   }
+  /* ---------- SIMPLE MODE (default) — clean, readable, no mono/display font, no uppercase tracking ---------- */
+  [data-ui="simple"] {
+    --disp: 'Inter', system-ui, sans-serif;
+    --mono: 'Inter', system-ui, sans-serif;
+  }
+  [data-ui="simple"] .brand-title { letter-spacing: 0.2px; }
+  [data-ui="simple"] .text-uppercase { text-transform: none !important; letter-spacing: normal !important; }
+  [data-ui="simple"] .field-section-label { letter-spacing: normal; text-transform: none; font-weight: 700; color: var(--cyan); font-size: .78rem; }
+  [data-ui="simple"] .specs-line { letter-spacing: normal; }
+  [data-ui="simple"] .card-glow:hover, [data-ui="simple"] .btn-grad:hover { box-shadow: none; }
+  [data-ui="simple"] .login-logo { filter: drop-shadow(0 4px 16px rgba(124,58,237,.3)); }
+  #uiModeBtn i { font-size: .95rem; }
   body {
     font-family: 'Inter', system-ui, sans-serif;
     position: relative;
@@ -108,7 +125,8 @@ survives redeploys).
     background: linear-gradient(135deg, rgba(6,6,15,.92), rgba(124,58,237,.14), rgba(6,6,15,.9)); }
   .login-card { max-width: 420px; width: 100%; background: rgba(13,13,32,.9); border: 1px solid var(--bs-border-color); border-radius: 20px; padding: 42px 34px 32px; text-align: center; box-shadow: 0 25px 80px rgba(0,0,0,.55); backdrop-filter: blur(10px); position: relative; z-index: 2; overflow: hidden; }
   .login-card::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; background: var(--grad); }
-  .login-logo { width: 84px; height: 84px; border-radius: 20px; object-fit: contain; background: rgba(255,255,255,.04); padding: 12px; margin-bottom: 18px; box-shadow: var(--glow); }
+  .login-logo { max-width: 210px; width: 58%; height: auto; object-fit: contain; margin: 0 auto 22px; display: block; filter: drop-shadow(0 8px 28px rgba(124,58,237,.5)); }
+  #gsiButtonOuter { display: inline-block; border-radius: 24px; overflow: hidden; box-shadow: 0 10px 32px rgba(0,0,0,.45); }
   .stat-card { border-radius: 14px; background: var(--bs-secondary-bg); border: 1px solid var(--bs-border-color); padding: 14px 18px; transition: all .15s; }
   .stat-num { font-family: var(--disp); font-size: 1.7rem; font-weight: 800; }
   .table > :not(caption) > * > * { background: transparent; }
@@ -138,7 +156,9 @@ survives redeploys).
       onerror="this.outerHTML='&lt;div class=\'login-logo d-flex align-items-center justify-content-center fs-1\'&gt;🏏&lt;/div&gt;'">
     <h1 class="brand-title fs-4 mb-1">QA Device Inventory</h1>
     <p class="text-faint small mb-4">Sign in with your Hitwicket Google account to view and manage the test device pool.</p>
-    <div id="gsiButton" class="d-flex justify-content-center"></div>
+    <div class="d-flex justify-content-center">
+      <div id="gsiButtonOuter"><div id="gsiButton"></div></div>
+    </div>
     <div id="gsiLoadError" class="alert alert-warning d-none mt-3 mb-0 py-2 px-3 small text-start">
       <i class="bi bi-exclamation-triangle me-1"></i>
       Couldn't load Google Sign-In — this can happen on the first load of a slow connection.
@@ -154,8 +174,9 @@ survives redeploys).
 
   <nav class="navbar navbar-expand-lg navbar-glass sticky-top py-2">
     <div class="container-fluid px-3 px-lg-4">
-      <span class="navbar-brand brand-title fs-5 mb-0 d-flex align-items-center gap-2">
-        <i class="bi bi-phone-fill"></i> DEVICE INVENTORY
+      <span class="navbar-brand mb-0 d-flex align-items-center gap-2">
+        <img src="https://cdn.octathorpeweb.com/v1/webstore/hitwicket-logo.png" alt="Hitwicket" style="height:34px;width:auto" onerror="this.style.display='none'">
+        <span class="brand-title fs-5">DEVICE INVENTORY</span>
       </span>
       <div class="d-flex align-items-center gap-2 ms-auto">
         <span id="livePill" class="badge badge-soft-success mono d-none d-sm-inline-flex align-items-center gap-1 py-2 px-2">
@@ -165,6 +186,9 @@ survives redeploys).
         <span id="overdueBadge" class="badge badge-soft-warning mono d-none align-items-center gap-1 py-2 px-2">
           <i class="bi bi-exclamation-triangle"></i> <span id="overdueCount">0</span> overdue
         </span>
+        <button class="btn btn-outline-secondary btn-icon rounded-circle" id="uiModeBtn" onclick="toggleUiMode()" title="Switch look">
+          <i class="bi bi-stars"></i>
+        </button>
         <button class="btn btn-outline-secondary btn-icon rounded-circle" onclick="refreshAll()" title="Refresh">
           <i class="bi bi-arrow-clockwise"></i>
         </button>
@@ -602,7 +626,27 @@ function signOut() {
 /* =====================================================================
    BOOT
    ===================================================================== */
+/* =====================================================================
+   UI MODE — simple (default, readable) vs fancy (neon/mono). Available
+   to every user, not just admins; stored per-browser in localStorage.
+   ===================================================================== */
+function toggleUiMode() {
+  const html = document.documentElement;
+  const next = (html.getAttribute('data-ui') || 'simple') === 'simple' ? 'fancy' : 'simple';
+  html.setAttribute('data-ui', next);
+  try { localStorage.setItem('ui_mode', next); } catch (e) {}
+  updateUiModeBtn();
+}
+function updateUiModeBtn() {
+  const btn = document.getElementById('uiModeBtn');
+  if (!btn) return;
+  const cur = document.documentElement.getAttribute('data-ui') || 'simple';
+  btn.innerHTML = cur === 'simple' ? '<i class="bi bi-stars"></i>' : '<i class="bi bi-type"></i>';
+  btn.title = cur === 'simple' ? 'Switch to the fancy neon look' : 'Switch to the simple look';
+}
+
 window.addEventListener('load', () => {
+  updateUiModeBtn();
   initGoogleWhenReady(20);
   if (session && session.token) {
     showApp();
