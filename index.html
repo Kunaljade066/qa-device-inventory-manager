@@ -259,7 +259,7 @@ survives redeploys).
 
     <!-- TOOLBAR -->
     <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
-      <div class="position-relative flex-grow-1" style="min-width:220px;max-width:360px">
+      <div class="position-relative flex-grow-1" style="min-width:200px;max-width:340px">
         <i class="bi bi-search position-absolute text-faint" style="left:12px;top:50%;transform:translateY(-50%)"></i>
         <input type="search" id="searchInput" class="form-control ps-5" placeholder="Search anything — specs, owner, RAM, serial, IMEI…">
       </div>
@@ -271,45 +271,43 @@ survives redeploys).
         <button class="btn btn-outline-secondary" data-filter="overdue">Overdue</button>
       </div>
 
-      <div class="dropdown" id="mf-type">
+      <div class="dropdown">
         <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
-          Type <span class="badge badge-soft-info ms-1 d-none" id="mf-type-badge"></span>
+          <i class="bi bi-funnel me-1"></i>Filters <span class="badge badge-soft-info ms-1 d-none" id="mf-total-badge"></span>
         </button>
-        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-type-menu"></div>
+        <div class="dropdown-menu p-3" style="min-width:520px;max-width:92vw">
+          <div class="row g-3">
+            <div class="col-6 col-md-4">
+              <div class="small text-faint mono text-uppercase mb-1" style="letter-spacing:1px">Type</div>
+              <div id="mf-type-menu" class="dropdown-menu-check"></div>
+            </div>
+            <div class="col-6 col-md-4">
+              <div class="small text-faint mono text-uppercase mb-1" style="letter-spacing:1px">Team</div>
+              <div id="mf-team-menu" class="dropdown-menu-check"></div>
+            </div>
+            <div class="col-6 col-md-4">
+              <div class="small text-faint mono text-uppercase mb-1" style="letter-spacing:1px">In Charge</div>
+              <div id="mf-inCharge-menu" class="dropdown-menu-check"></div>
+            </div>
+            <div class="col-6 col-md-4">
+              <div class="small text-faint mono text-uppercase mb-1" style="letter-spacing:1px">Tier</div>
+              <div id="mf-tier-menu" class="dropdown-menu-check"></div>
+            </div>
+            <div class="col-6 col-md-4">
+              <div class="small text-faint mono text-uppercase mb-1" style="letter-spacing:1px">OS</div>
+              <div id="mf-osVersion-menu" class="dropdown-menu-check"></div>
+            </div>
+            <div class="col-6 col-md-4">
+              <div class="small text-faint mono text-uppercase mb-1" style="letter-spacing:1px">Model</div>
+              <div id="mf-modelName-menu" class="dropdown-menu-check"></div>
+            </div>
+          </div>
+          <hr class="my-2">
+          <button class="btn btn-sm btn-outline-secondary w-100" onclick="clearAllFilters()">Clear all filters</button>
+        </div>
       </div>
-      <div class="dropdown" id="mf-team">
-        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
-          Team <span class="badge badge-soft-info ms-1 d-none" id="mf-team-badge"></span>
-        </button>
-        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-team-menu"></div>
-      </div>
-      <div class="dropdown" id="mf-inCharge">
-        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
-          In Charge <span class="badge badge-soft-info ms-1 d-none" id="mf-inCharge-badge"></span>
-        </button>
-        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-inCharge-menu"></div>
-      </div>
-      <div class="dropdown" id="mf-tier">
-        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
-          Tier <span class="badge badge-soft-info ms-1 d-none" id="mf-tier-badge"></span>
-        </button>
-        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-tier-menu"></div>
-      </div>
-      <div class="dropdown" id="mf-osVersion">
-        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
-          OS <span class="badge badge-soft-info ms-1 d-none" id="mf-osVersion-badge"></span>
-        </button>
-        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-osVersion-menu"></div>
-      </div>
-      <div class="dropdown" id="mf-modelName">
-        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
-          Model <span class="badge badge-soft-info ms-1 d-none" id="mf-modelName-badge"></span>
-        </button>
-        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-modelName-menu"></div>
-      </div>
-      <button class="btn btn-outline-secondary" onclick="clearAllFilters()" title="Clear filters"><i class="bi bi-x-circle"></i></button>
 
-      <div class="ms-auto d-flex gap-2">
+      <div class="ms-lg-auto d-flex flex-wrap gap-2">
         <div class="dropdown">
           <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown"><i class="bi bi-download me-1"></i>Export</button>
           <ul class="dropdown-menu dropdown-menu-end">
@@ -1098,18 +1096,17 @@ function populateFilterDropdowns() {
 }
 function toggleMF(key, val) {
   if (MF_STATE[key].has(val)) MF_STATE[key].delete(val); else MF_STATE[key].add(val);
-  const badge = document.getElementById('mf-' + key + '-badge');
-  const n = MF_STATE[key].size;
-  badge.textContent = n; badge.classList.toggle('d-none', n === 0);
+  updateFilterBadge();
   renderTable();
+}
+function updateFilterBadge() {
+  const total = Object.values(MF_STATE).reduce((sum, s) => sum + s.size, 0);
+  const badge = document.getElementById('mf-total-badge');
+  if (badge) { badge.textContent = total; badge.classList.toggle('d-none', total === 0); }
 }
 function clearAllFilters() {
   Object.keys(MF_STATE).forEach(k => MF_STATE[k].clear());
-  document.querySelectorAll('.mono.ms-1.badge-soft-info').forEach(b => {});
-  ['type','team','inCharge','tier','osVersion','modelName'].forEach(k => {
-    const badge = document.getElementById('mf-' + k + '-badge');
-    if (badge) { badge.textContent = ''; badge.classList.add('d-none'); }
-  });
+  updateFilterBadge();
   document.getElementById('searchInput').value = '';
   searchTerm = '';
   document.querySelectorAll('#statusFilterTabs button').forEach(b => b.classList.remove('active'));
