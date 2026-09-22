@@ -332,12 +332,21 @@ Set WORKER_URL and GOOGLE_CLIENT_ID in CONFIG below, then implement:
 
   footer.app-footer { text-align: center; padding: 30px 0 10px; color: var(--text-faint); font-size: 0.76rem; }
 
+  /* ---------- specs modal ---------- */
+  .specs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 4px 0 6px; }
+  .specs-item .specs-label { font-size: 0.7rem; color: var(--text-faint); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 3px; }
+  .specs-item .specs-value { font-size: 0.87rem; font-weight: 600; word-break: break-word; }
+  .field-section-label { font-size: 0.72rem; font-weight: 700; color: var(--text-faint); text-transform: uppercase; letter-spacing: .03em; margin: 14px 0 8px; }
+  .field-section-label:first-child { margin-top: 0; }
+  .tier-badge { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 0.7rem; font-weight: 700; background: var(--bg-raised); color: var(--text-dim); border: 1px solid var(--border); margin-left: 6px; }
+
   /* ---------- responsive ---------- */
   @media (max-width: 860px) {
     .stats { grid-template-columns: repeat(2, 1fr); }
     .add-grid { grid-template-columns: 1fr; }
     .table-card { overflow-x: auto; }
     table { min-width: 720px; }
+    .specs-grid { grid-template-columns: 1fr; }
   }
   @media (max-width: 480px) {
     .brand-sub { display: none; }
@@ -391,7 +400,7 @@ Set WORKER_URL and GOOGLE_CLIENT_ID in CONFIG below, then implement:
     <div class="toolbar">
       <div class="search-wrap">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <input type="search" id="searchInput" placeholder="Search device, owner, or holder…" />
+        <input type="search" id="searchInput" placeholder="Search device, owner, team, ID, serial, IMEI…" />
       </div>
       <div class="filter-tabs" id="filterTabs">
         <button class="active" data-filter="all">All</button>
@@ -409,6 +418,7 @@ Set WORKER_URL and GOOGLE_CLIENT_ID in CONFIG below, then implement:
     </div>
 
     <div class="add-panel" id="addPanel">
+      <div class="field-section-label">Basic info</div>
       <div class="add-grid">
         <div>
           <label for="deviceName">Device name / model *</label>
@@ -424,14 +434,78 @@ Set WORKER_URL and GOOGLE_CLIENT_ID in CONFIG below, then implement:
           </select>
         </div>
         <div>
+          <label for="deviceIdField">Device ID</label>
+          <input type="text" id="deviceIdField" placeholder="Asset tag / internal ID" />
+        </div>
+      </div>
+
+      <div class="field-section-label">Ownership</div>
+      <div class="add-grid">
+        <div>
           <label for="deviceOwner">Default owner *</label>
           <input type="text" id="deviceOwner" placeholder="Who this device belongs to" />
         </div>
+        <div>
+          <label for="deviceTeam">Team</label>
+          <input type="text" id="deviceTeam" placeholder="e.g. QA, Dev, Design" />
+        </div>
+        <div>
+          <label for="deviceInCharge">In charge</label>
+          <input type="text" id="deviceInCharge" placeholder="Owner / responsible person" />
+        </div>
       </div>
-      <div class="field">
-        <label for="deviceNotes">Notes (optional)</label>
-        <input type="text" id="deviceNotes" placeholder="OS quirks, region, rooted, etc." />
+      <div class="add-grid">
+        <div>
+          <label for="devicePersonUsing">Person using</label>
+          <input type="text" id="devicePersonUsing" placeholder="Currently using it" />
+        </div>
+        <div>
+          <label for="deviceTier">Tier</label>
+          <input type="text" id="deviceTier" placeholder="e.g. Tier 1 / Flagship" />
+        </div>
+        <div></div>
       </div>
+
+      <div class="field-section-label">Specs</div>
+      <div class="add-grid">
+        <div>
+          <label for="deviceModelName">Model name</label>
+          <input type="text" id="deviceModelName" placeholder="e.g. Pixel 7a" />
+        </div>
+        <div>
+          <label for="deviceOsVersion">OS version</label>
+          <input type="text" id="deviceOsVersion" placeholder="e.g. Android 15" />
+        </div>
+        <div>
+          <label for="deviceGpu">GPU</label>
+          <input type="text" id="deviceGpu" placeholder="e.g. Adreno 725" />
+        </div>
+      </div>
+      <div class="add-grid">
+        <div>
+          <label for="deviceRam">RAM size</label>
+          <input type="text" id="deviceRam" placeholder="e.g. 8GB" />
+        </div>
+        <div>
+          <label for="deviceInternalMemory">Internal memory</label>
+          <input type="text" id="deviceInternalMemory" placeholder="e.g. 128GB" />
+        </div>
+        <div>
+          <label for="deviceSerialNo">Serial no.</label>
+          <input type="text" id="deviceSerialNo" placeholder="Serial number" />
+        </div>
+      </div>
+      <div class="add-grid">
+        <div>
+          <label for="deviceImei">IMEI</label>
+          <input type="text" id="deviceImei" placeholder="IMEI number" />
+        </div>
+        <div style="grid-column: span 2;">
+          <label for="deviceNotes">Notes</label>
+          <input type="text" id="deviceNotes" placeholder="OS quirks, region, rooted, etc." />
+        </div>
+      </div>
+
       <div class="modal-actions" style="margin-top:4px;">
         <button class="btn btn-ghost" id="cancelAddBtn">Cancel</button>
         <button class="btn btn-primary" id="submitAddBtn">Add device</button>
@@ -443,7 +517,9 @@ Set WORKER_URL and GOOGLE_CLIENT_ID in CONFIG below, then implement:
         <thead>
           <tr>
             <th data-sort="name">Device <span class="sort-arrow"></span></th>
-            <th data-sort="assigned">Owner <span class="sort-arrow"></span></th>
+            <th data-sort="deviceId">Device ID <span class="sort-arrow"></span></th>
+            <th data-sort="team">Team <span class="sort-arrow"></span></th>
+            <th data-sort="inCharge">In charge <span class="sort-arrow"></span></th>
             <th data-sort="status">Status <span class="sort-arrow"></span></th>
             <th data-sort="activity">Activity <span class="sort-arrow"></span></th>
             <th>Actions</th>
@@ -482,12 +558,31 @@ Set WORKER_URL and GOOGLE_CLIENT_ID in CONFIG below, then implement:
 <div class="modal" id="editModal">
   <div class="modal-card">
     <div class="modal-title">Edit device</div>
+
+    <div class="field-section-label">Basic info</div>
     <div class="field"><label>Device name</label><input type="text" id="editName" /></div>
     <div class="field"><label>Type</label>
       <select id="editType"><option>Phone</option><option>Tablet</option><option>Emulator</option><option>Other</option></select>
     </div>
+    <div class="field"><label>Device ID</label><input type="text" id="editDeviceId" /></div>
+
+    <div class="field-section-label">Ownership</div>
     <div class="field"><label>Default owner</label><input type="text" id="editOwner" /></div>
+    <div class="field"><label>Team</label><input type="text" id="editTeam" /></div>
+    <div class="field"><label>In charge</label><input type="text" id="editInCharge" /></div>
+    <div class="field"><label>Person using</label><input type="text" id="editPersonUsing" /></div>
+    <div class="field"><label>Tier</label><input type="text" id="editTier" /></div>
+
+    <div class="field-section-label">Specs</div>
+    <div class="field"><label>Model name</label><input type="text" id="editModelName" /></div>
+    <div class="field"><label>OS version</label><input type="text" id="editOsVersion" /></div>
+    <div class="field"><label>RAM size</label><input type="text" id="editRam" /></div>
+    <div class="field"><label>Internal memory</label><input type="text" id="editInternalMemory" /></div>
+    <div class="field"><label>GPU</label><input type="text" id="editGpu" /></div>
+    <div class="field"><label>Serial no.</label><input type="text" id="editSerialNo" /></div>
+    <div class="field"><label>IMEI</label><input type="text" id="editImei" /></div>
     <div class="field"><label>Notes</label><input type="text" id="editNotes" /></div>
+
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('editModal')">Cancel</button>
       <button class="btn btn-primary" id="confirmEditBtn">Save</button>
@@ -515,6 +610,18 @@ Set WORKER_URL and GOOGLE_CLIENT_ID in CONFIG below, then implement:
     <div id="historyList"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('historyModal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Specs modal -->
+<div class="modal" id="specsModal">
+  <div class="modal-card">
+    <div class="modal-title">Device specs</div>
+    <div class="modal-sub" id="specsDeviceLabel"></div>
+    <div class="specs-grid" id="specsGrid"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('specsModal')">Close</button>
     </div>
   </div>
 </div>
@@ -754,7 +861,7 @@ function getFiltered() {
     if (activeFilter === 'out' && d.status !== 'out') return false;
     if (activeFilter === 'overdue' && !isOverdue(d)) return false;
     if (searchTerm) {
-      const hay = [d.name, d.assigned, d.holder, d.notes].filter(Boolean).join(' ').toLowerCase();
+      const hay = [d.name, d.assigned, d.holder, d.notes, d.deviceId, d.team, d.inCharge, d.personUsing, d.modelName, d.serialNo, d.imei].filter(Boolean).join(' ').toLowerCase();
       if (!hay.includes(searchTerm.toLowerCase())) return false;
     }
     return true;
@@ -783,7 +890,7 @@ function renderTable() {
   if (activeTh) activeTh.textContent = sortState.dir === 1 ? '↑' : '↓';
 
   if (list.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state">
+    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
       <svg width="34" height="34" viewBox="0 0 24 24" fill="none"><rect x="7" y="2" width="10" height="20" rx="2.5" stroke="currentColor" stroke-width="1.6"/></svg>
       <div>${devices.length === 0 ? 'No devices yet — add the first one.' : 'Nothing matches your search or filter.'}</div>
     </div></td></tr>`;
@@ -815,14 +922,16 @@ function rowHtml(d) {
       <div class="device-cell">
         <div class="device-icon">${typeIconSvg(d.type)}</div>
         <div>
-          <div class="device-name">${escapeHtml(d.name)}</div>
+          <div class="device-name">${escapeHtml(d.name)}${d.tier ? `<span class="tier-badge">${escapeHtml(d.tier)}</span>` : ''}</div>
           <div class="device-type">${escapeHtml(d.type || 'Other')}</div>
         </div>
       </div>
     </td>
-    <td class="assigned-cell">
-      <span class="avatar-badge" style="background:${colorFor(d.assigned)}">${initialsFor(d.assigned)}</span>
-      ${escapeHtml(d.assigned || '—')}
+    <td>${escapeHtml(d.deviceId || '—')}</td>
+    <td>${escapeHtml(d.team || '—')}</td>
+    <td>
+      <span class="avatar-badge" style="background:${colorFor(d.inCharge || d.assigned)}">${initialsFor(d.inCharge || d.assigned)}</span>
+      ${escapeHtml(d.inCharge || d.assigned || '—')}
     </td>
     <td>${statusPill}</td>
     <td>${activity}</td>
@@ -832,6 +941,7 @@ function rowHtml(d) {
           ? `<button class="btn act-out" onclick="openCheckout('${d.id}')">Check out</button>`
           : `<button class="btn act-in" onclick="checkIn('${d.id}')">Check in</button>`}
         <button class="btn act-edit" onclick="openEdit('${d.id}')">Edit</button>
+        <button class="btn act-hist" onclick="openSpecs('${d.id}')">Specs</button>
         <button class="btn act-hist" onclick="openHistory('${d.id}')">History</button>
         <button class="btn act-del" onclick="openDelete('${d.id}')">Delete</button>
       </div>
@@ -854,12 +964,26 @@ document.getElementById('submitAddBtn').onclick = async () => {
   const type = document.getElementById('deviceType').value;
   const assigned = document.getElementById('deviceOwner').value.trim();
   const notes = document.getElementById('deviceNotes').value.trim();
+  const deviceId = document.getElementById('deviceIdField').value.trim();
+  const team = document.getElementById('deviceTeam').value.trim();
+  const inCharge = document.getElementById('deviceInCharge').value.trim();
+  const personUsing = document.getElementById('devicePersonUsing').value.trim();
+  const tier = document.getElementById('deviceTier').value.trim();
+  const modelName = document.getElementById('deviceModelName').value.trim();
+  const osVersion = document.getElementById('deviceOsVersion').value.trim();
+  const gpu = document.getElementById('deviceGpu').value.trim();
+  const ramSize = document.getElementById('deviceRam').value.trim();
+  const internalMemory = document.getElementById('deviceInternalMemory').value.trim();
+  const serialNo = document.getElementById('deviceSerialNo').value.trim();
+  const imei = document.getElementById('deviceImei').value.trim();
   if (!name || !assigned) return toast('Device name and owner are required.', true);
   try {
-    await apiFetch('/api/devices', { method: 'POST', body: JSON.stringify({ name, type, assigned, notes }) });
-    document.getElementById('deviceName').value = '';
-    document.getElementById('deviceOwner').value = '';
-    document.getElementById('deviceNotes').value = '';
+    await apiFetch('/api/devices', {
+      method: 'POST',
+      body: JSON.stringify({ name, type, assigned, notes, deviceId, team, inCharge, personUsing, tier, modelName, osVersion, gpu, ramSize, internalMemory, serialNo, imei })
+    });
+    ['deviceName','deviceOwner','deviceNotes','deviceIdField','deviceTeam','deviceInCharge','devicePersonUsing','deviceTier','deviceModelName','deviceOsVersion','deviceGpu','deviceRam','deviceInternalMemory','deviceSerialNo','deviceImei']
+      .forEach(id => document.getElementById(id).value = '');
     document.getElementById('addPanel').classList.remove('open');
     toast('Device added.');
     loadDevices();
@@ -899,7 +1023,19 @@ function openEdit(id) {
   const d = devices.find(x => x.id === id);
   document.getElementById('editName').value = d.name || '';
   document.getElementById('editType').value = d.type || 'Phone';
+  document.getElementById('editDeviceId').value = d.deviceId || '';
   document.getElementById('editOwner').value = d.assigned || '';
+  document.getElementById('editTeam').value = d.team || '';
+  document.getElementById('editInCharge').value = d.inCharge || '';
+  document.getElementById('editPersonUsing').value = d.personUsing || '';
+  document.getElementById('editTier').value = d.tier || '';
+  document.getElementById('editModelName').value = d.modelName || '';
+  document.getElementById('editOsVersion').value = d.osVersion || '';
+  document.getElementById('editRam').value = d.ramSize || '';
+  document.getElementById('editInternalMemory').value = d.internalMemory || '';
+  document.getElementById('editGpu').value = d.gpu || '';
+  document.getElementById('editSerialNo').value = d.serialNo || '';
+  document.getElementById('editImei').value = d.imei || '';
   document.getElementById('editNotes').value = d.notes || '';
   openModal('editModal');
 }
@@ -908,9 +1044,24 @@ document.getElementById('confirmEditBtn').onclick = async () => {
   const type = document.getElementById('editType').value;
   const assigned = document.getElementById('editOwner').value.trim();
   const notes = document.getElementById('editNotes').value.trim();
+  const deviceId = document.getElementById('editDeviceId').value.trim();
+  const team = document.getElementById('editTeam').value.trim();
+  const inCharge = document.getElementById('editInCharge').value.trim();
+  const personUsing = document.getElementById('editPersonUsing').value.trim();
+  const tier = document.getElementById('editTier').value.trim();
+  const modelName = document.getElementById('editModelName').value.trim();
+  const osVersion = document.getElementById('editOsVersion').value.trim();
+  const ramSize = document.getElementById('editRam').value.trim();
+  const internalMemory = document.getElementById('editInternalMemory').value.trim();
+  const gpu = document.getElementById('editGpu').value.trim();
+  const serialNo = document.getElementById('editSerialNo').value.trim();
+  const imei = document.getElementById('editImei').value.trim();
   if (!name || !assigned) return toast('Device name and owner are required.', true);
   try {
-    await apiFetch(`/api/devices/${pendingEditId}`, { method: 'PUT', body: JSON.stringify({ name, type, assigned, notes }) });
+    await apiFetch(`/api/devices/${pendingEditId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name, type, assigned, notes, deviceId, team, inCharge, personUsing, tier, modelName, osVersion, ramSize, internalMemory, gpu, serialNo, imei })
+    });
     closeModal('editModal');
     toast('Saved.');
     loadDevices();
@@ -947,6 +1098,22 @@ function openHistory(id) {
       </div>`).join('');
   }
   openModal('historyModal');
+}
+
+function openSpecs(id) {
+  const d = devices.find(x => x.id === id);
+  document.getElementById('specsDeviceLabel').textContent = `${d.name}${d.deviceId ? ' · ' + d.deviceId : ''}`;
+  const fields = [
+    ['In charge', d.inCharge], ['Team', d.team], ['Person using', d.personUsing], ['Tier', d.tier],
+    ['Model name', d.modelName], ['OS version', d.osVersion], ['RAM size', d.ramSize], ['Internal memory', d.internalMemory],
+    ['GPU', d.gpu], ['Serial no.', d.serialNo], ['IMEI', d.imei], ['Notes', d.notes]
+  ];
+  document.getElementById('specsGrid').innerHTML = fields.map(([label, value]) => `
+    <div class="specs-item">
+      <div class="specs-label">${escapeHtml(label)}</div>
+      <div class="specs-value">${escapeHtml(value || '—')}</div>
+    </div>`).join('');
+  openModal('specsModal');
 }
 
 /* =====================================================================
