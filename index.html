@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Device Inventory · Hitwicket</title>
+<title>QA Device Inventory · Hitwicket</title>
 <script>
   // Apply the saved color theme and UI mode before first paint to avoid a flash
   // of the wrong look. Light is the default color theme; "simple" is the default
@@ -178,6 +178,27 @@ survives redeploys).
   .cursor-pointer { cursor: pointer; }
   .field-section-label { font-family: var(--mono); font-size: .68rem; letter-spacing: 1.5px; text-transform: uppercase; color: var(--cyan); margin: 14px 0 8px; }
   .field-section-label:first-child { margin-top: 0; }
+
+  /* ---------- FTUE TOUR ---------- */
+  .tour-overlay { position: fixed; inset: 0; z-index: 9000; background: rgba(2,2,10,.72); backdrop-filter: blur(1px); transition: clip-path .35s ease; }
+  [data-bs-theme="light"] .tour-overlay { background: rgba(20,20,45,.55); }
+  .tour-spotlight-ring { position: fixed; z-index: 9002; border-radius: 12px; pointer-events: none;
+    outline: 2.5px solid var(--accent); box-shadow: 0 0 0 4px rgba(124,58,237,.25), 0 0 28px 6px rgba(124,58,237,.55);
+    animation: tourPulse 2s ease-in-out infinite; transition: top .3s ease, left .3s ease, width .3s ease, height .3s ease; }
+  @keyframes tourPulse {
+    0%, 100% { outline-color: var(--accent); box-shadow: 0 0 0 4px rgba(124,58,237,.25), 0 0 28px 6px rgba(124,58,237,.55); }
+    50% { outline-color: var(--cyan); box-shadow: 0 0 0 6px rgba(6,182,212,.3), 0 0 40px 10px rgba(6,182,212,.5); }
+  }
+  .tour-tap-block { position: fixed; z-index: 9003; cursor: default; background: transparent; }
+  .tour-card { position: fixed; z-index: 9004; width: min(360px, 92vw); background: var(--bs-secondary-bg);
+    border: 1px solid var(--bs-border-color); border-radius: 16px; padding: 18px 20px; box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    animation: tourIn .25s cubic-bezier(.2,.8,.2,1); }
+  @keyframes tourIn { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
+  .tour-card-title { font-family: var(--disp); font-size: 1rem; font-weight: 800; margin-bottom: 6px; color: var(--accent); }
+  .tour-card-text { font-size: .88rem; color: var(--bs-body-color); line-height: 1.55; margin-bottom: 14px; }
+  .tour-dots { display: flex; gap: 5px; margin-bottom: 14px; }
+  .tour-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bs-border-color); cursor: pointer; transition: all .2s; flex-shrink: 0; }
+  .tour-dot.on { background: var(--accent); width: 18px; border-radius: 4px; }
 </style>
 </head>
 <body>
@@ -192,7 +213,7 @@ survives redeploys).
   <div class="login-card">
     <img class="login-logo" src="https://cdn.octathorpeweb.com/v1/webstore/hitwicket-logo.png" alt="Hitwicket"
       onerror="this.outerHTML='&lt;div class=\'login-logo d-flex align-items-center justify-content-center fs-1\'&gt;🏏&lt;/div&gt;'">
-    <h1 class="brand-title fs-4 mb-1">Device Inventory</h1>
+    <h1 class="brand-title fs-4 mb-1">QA Device Inventory</h1>
     <p class="text-faint small mb-4">Sign in with your Hitwicket Google account to view and manage the test device pool.</p>
     <div class="d-flex justify-content-center">
       <div id="gsiButtonOuter"><div id="gsiButton"></div></div>
@@ -214,7 +235,7 @@ survives redeploys).
     <div class="container-fluid px-3 px-lg-4">
       <span class="navbar-brand mb-0 d-flex align-items-center gap-2">
         <img src="https://cdn.octathorpeweb.com/v1/webstore/hitwicket-logo.png" alt="Hitwicket" style="height:34px;width:auto" onerror="this.style.display='none'">
-        <span class="brand-title fs-5">Hitwicket Device Inventory</span>
+        <span class="brand-title fs-5">DEVICE INVENTORY</span>
       </span>
       <div class="d-flex align-items-center gap-2 ms-auto">
         <span id="livePill" class="badge badge-soft-success mono d-none d-sm-inline-flex align-items-center gap-1 py-2 px-2">
@@ -245,6 +266,8 @@ survives redeploys).
           <ul class="dropdown-menu dropdown-menu-end">
             <li><h6 class="dropdown-header" id="userEmailHeader">—</h6></li>
             <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="#" onclick="startTour(true);return false;"><i class="bi bi-compass me-2"></i>Take a tour</a></li>
+            <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" href="#" onclick="signOut();return false;"><i class="bi bi-box-arrow-right me-2"></i>Sign out</a></li>
           </ul>
         </div>
@@ -271,8 +294,8 @@ survives redeploys).
         <button class="btn btn-outline-secondary" data-filter="overdue">Overdue</button>
       </div>
 
-      <div class="dropdown">
-        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+      <div class="dropdown" id="filtersDropdown">
+        <button class="btn btn-outline-secondary dropdown-toggle" id="filtersDropdownBtn" data-bs-toggle="dropdown" data-bs-auto-close="outside">
           <i class="bi bi-funnel me-1"></i>Filters <span class="badge badge-soft-info ms-1 d-none" id="mf-total-badge"></span>
         </button>
         <div class="dropdown-menu p-3" style="min-width:520px;max-width:92vw">
@@ -325,7 +348,7 @@ survives redeploys).
         </div>
         <input type="file" id="restoreFile" accept=".json" class="d-none">
         <input type="file" id="sheetImportFile" accept=".xlsx,.xls,.csv" class="d-none">
-        <button class="btn btn-grad" data-bs-toggle="modal" data-bs-target="#deviceModal" onclick="openAddDevice()"><i class="bi bi-plus-lg me-1"></i>Add device</button>
+        <button class="btn btn-grad" id="addDeviceBtn" data-bs-toggle="modal" data-bs-target="#deviceModal" onclick="openAddDevice()"><i class="bi bi-plus-lg me-1"></i>Add device</button>
       </div>
     </div>
 
@@ -800,6 +823,7 @@ async function showApp() {
   await loadConfig();
   await loadDevices();
   schedulePoll();
+  setTimeout(() => startTour(false), 700); // no-op if already seen; force=false
 }
 
 function updateRoleUI() {
@@ -1639,6 +1663,174 @@ function formatDate(dateStr) {
   const d = new Date(dateStr);
   return isNaN(d.getTime()) ? dateStr : d.toLocaleString();
 }
+
+/* =====================================================================
+   FTUE TOUR — a short spotlight walkthrough shown once to new users,
+   replayable anytime from the profile menu ("Take a tour").
+   ===================================================================== */
+const TOUR_KEY = 'ftue_tour_done_v1';
+const TOUR_STEPS = [
+  { target: null,
+    title: 'Welcome to the QA Device Inventory 👋',
+    text: "Quick 30-second tour of where everything lives. You can skip anytime, or replay this later from your profile menu." },
+  { target: '#searchInput',
+    title: 'Search anything',
+    text: 'Not just the device name — model, RAM, OS version, serial number, IMEI, custom fields, all of it.' },
+  { target: '#statsRow',
+    title: 'These numbers are clickable',
+    text: 'Tap any stat card — Total, Checked in, Checked out, Overdue — to instantly filter the table to that group.' },
+  { target: '#filtersDropdownBtn',
+    title: 'Multi-select filters',
+    text: 'Narrow by Type, Team, In Charge, Tier, OS, or Model — pick as many values as you need in each.' },
+  { target: '#addDeviceBtn',
+    title: 'Add a device',
+    text: "Basic info, ownership, and full specs in one form. Leave the Device ID blank and it'll auto-number itself." },
+  { target: '#deviceTable',
+    title: 'Row actions',
+    text: 'Check a device out or in, edit it, view its full specs, see its history — all from the icons on the right of each row.' },
+  { target: '#uiModeBtn',
+    title: 'Make it yours',
+    text: 'These two buttons switch between a simple/fancy look and light/dark color theme. Your choice is remembered.' },
+  { target: '#adminHamburgerBtn', adminOnly: true,
+    title: 'Admin menu',
+    text: 'Manage dropdown options, add custom tracked fields, control who else is admin, and view the team activity log.' },
+  { target: null,
+    title: "You're set! 🎉",
+    text: 'Explore Export/Import for spreadsheet work, or just start adding devices. This tour is always one click away from your profile menu.' }
+];
+let tourStep = 0;
+let tourActive = false;
+
+function startTour(force) {
+  try { if (!force && localStorage.getItem(TOUR_KEY)) return; } catch (e) {}
+  tourStep = 0;
+  tourActive = true;
+  showTourStep();
+}
+
+function visibleTourSteps() {
+  const isAdmin = session && session.user && session.user.role === 'admin';
+  return TOUR_STEPS.filter(s => !s.adminOnly || isAdmin);
+}
+
+function showTourStep() {
+  closeTourUI();
+  const steps = visibleTourSteps();
+  if (tourStep >= steps.length) { endTour(); return; }
+  const step = steps[tourStep];
+
+  const overlay = document.createElement('div');
+  overlay.className = 'tour-overlay';
+  overlay.id = 'tourOverlay';
+  overlay.addEventListener('click', e => { if (e.target === overlay) advanceTour(); });
+  document.body.appendChild(overlay);
+
+  let targetEl = null;
+  if (step.target) {
+    targetEl = document.querySelector(step.target);
+    if (targetEl) {
+      targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => applySpotlight(targetEl, overlay, step), 280);
+    }
+  }
+  if (!targetEl) overlay.style.clipPath = '';
+
+  const dots = steps.map((_, i) => `<div class="tour-dot${i === tourStep ? ' on' : ''}" onclick="tourStep=${i};showTourStep()"></div>`).join('');
+  const card = document.createElement('div');
+  card.className = 'tour-card';
+  card.id = 'tourCard';
+  card.innerHTML = `
+    <div class="tour-card-title">${escapeHtml(step.title)}</div>
+    <div class="tour-card-text">${escapeHtml(step.text)}</div>
+    <div class="tour-dots">${dots}</div>
+    <div class="d-flex align-items-center gap-2">
+      <span class="text-faint mono small">${tourStep + 1} / ${steps.length}</span>
+      <div class="ms-auto d-flex gap-2">
+        ${tourStep > 0 ? '<button class="btn btn-sm btn-outline-secondary" onclick="prevTour()">Back</button>' : ''}
+        <button class="btn btn-sm btn-outline-secondary" onclick="endTour()">Skip</button>
+        <button class="btn btn-sm btn-grad" onclick="advanceTour()">${tourStep === steps.length - 1 ? 'Done' : 'Next'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(card);
+  positionTourCard(card, targetEl);
+}
+
+function applySpotlight(el, overlay, step) {
+  const pad = 10;
+  const r = el.getBoundingClientRect();
+  const x1 = r.left - pad, y1 = r.top - pad, x2 = r.right + pad, y2 = r.bottom + pad;
+  const W = window.innerWidth, H = window.innerHeight;
+  overlay.style.clipPath =
+    `polygon(0 0,${W}px 0,${W}px ${H}px,0 ${H}px,0 0,` +
+    `${x1}px ${y1}px,${x1}px ${y2}px,${x2}px ${y2}px,${x2}px ${y1}px,${x1}px ${y1}px)`;
+
+  const ring = document.createElement('div');
+  ring.className = 'tour-spotlight-ring';
+  ring.id = 'tourSpotlight';
+  ring.style.top = y1 + 'px';
+  ring.style.left = x1 + 'px';
+  ring.style.width = (x2 - x1) + 'px';
+  ring.style.height = (y2 - y1) + 'px';
+  document.body.appendChild(ring);
+
+  // Blocks interaction with the highlighted element while letting the tour
+  // card handle its own clicks; tapping the element itself just advances.
+  const block = document.createElement('div');
+  block.className = 'tour-tap-block';
+  block.id = 'tourTapBlock';
+  block.style.top = y1 + 'px';
+  block.style.left = x1 + 'px';
+  block.style.width = (x2 - x1) + 'px';
+  block.style.height = (y2 - y1) + 'px';
+  block.addEventListener('click', () => advanceTour());
+  document.body.appendChild(block);
+
+  const card = document.getElementById('tourCard');
+  if (card) positionTourCard(card, el);
+}
+
+function positionTourCard(card, targetEl) {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  if (!targetEl) {
+    card.style.top = '50%'; card.style.left = '50%'; card.style.transform = 'translate(-50%,-50%)';
+    return;
+  }
+  requestAnimationFrame(() => {
+    const r = targetEl.getBoundingClientRect();
+    const cardH = card.offsetHeight || 180;
+    const cardW = card.offsetWidth || 360;
+    const spaceBelow = vh - r.bottom, spaceAbove = r.top;
+    let top, left = Math.min(Math.max(r.left, 12), vw - cardW - 12);
+    if (spaceBelow >= cardH + 24) top = r.bottom + 16;
+    else if (spaceAbove >= cardH + 24) top = r.top - cardH - 16;
+    else top = Math.max(12, vh / 2 - cardH / 2);
+    card.style.left = left + 'px';
+    card.style.top = top + 'px';
+    card.style.transform = 'none';
+  });
+}
+
+function advanceTour() { tourStep++; showTourStep(); }
+function prevTour() { tourStep = Math.max(0, tourStep - 1); showTourStep(); }
+function endTour() {
+  closeTourUI();
+  tourActive = false;
+  try { localStorage.setItem(TOUR_KEY, '1'); } catch (e) {}
+}
+function closeTourUI() {
+  ['tourOverlay', 'tourSpotlight', 'tourTapBlock', 'tourCard'].forEach(id => document.getElementById(id)?.remove());
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && tourActive) endTour(); });
+window.addEventListener('resize', () => {
+  if (!tourActive) return;
+  const steps = visibleTourSteps();
+  const step = steps[tourStep];
+  const overlay = document.getElementById('tourOverlay');
+  if (overlay && step && step.target) {
+    const el = document.querySelector(step.target);
+    if (el) applySpotlight(el, overlay, step);
+  }
+});
 </script>
 </body>
 </html>
