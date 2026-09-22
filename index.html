@@ -692,7 +692,14 @@ window.addEventListener('load', () => {
 async function showApp() {
   document.getElementById('gate').classList.add('d-none');
   document.getElementById('app').classList.remove('d-none');
+  updateRoleUI();
+  await refreshMe(); // pick up the CURRENT role rather than trusting what was cached at login
+  await loadConfig();
+  await loadDevices();
+  schedulePoll();
+}
 
+function updateRoleUI() {
   const av = document.getElementById('userAvatar');
   const nameEl = document.getElementById('userName');
   const emailEl = document.getElementById('userEmailHeader');
@@ -706,10 +713,21 @@ async function showApp() {
   document.getElementById('adminHamburgerBtn').classList.toggle('d-none', session.user.role !== 'admin');
   document.getElementById('bulkSelectTh').innerHTML = session.user.role === 'admin'
     ? '<input type="checkbox" class="form-check-input" id="bulkSelectAll" onclick="toggleSelectAll(event)">' : '';
+}
 
-  await loadConfig();
-  await loadDevices();
-  schedulePoll();
+// Asks the server what our role ACTUALLY is right now (server-computed from
+// the live admin list, not whatever was cached in localStorage at login) and
+// syncs it locally. Called on load and on every poll tick, so a promotion or
+// demotion shows up within one poll cycle — no sign-out/sign-in required.
+async function refreshMe() {
+  try {
+    const me = await apiFetch('/api/me');
+    const roleChanged = session.user.role !== me.role;
+    session.user = { ...session.user, ...me };
+    saveSession(session.token, session.user);
+    updateRoleUI();
+    if (roleChanged) { renderTable(); toast('Your access level changed to ' + me.role + '.'); }
+  } catch (e) { /* non-fatal — keep whatever we had */ }
 }
 
 /* =====================================================================
@@ -789,7 +807,7 @@ function schedulePoll() {
   if (!session || document.hidden) { pollTimer = setTimeout(schedulePoll, 4000); return; }
   const idle = (Date.now() - lastInteraction) > CONFIG.IDLE_AFTER_MS;
   const delay = idle ? CONFIG.POLL_IDLE_MS : CONFIG.POLL_ACTIVE_MS;
-  pollTimer = setTimeout(async () => { await loadDevices(true); schedulePoll(); }, delay);
+  pollTimer = setTimeout(async () => { await refreshMe(); await loadDevices(true); schedulePoll(); }, delay);
 }
 function flashChanged(prevById) {
   devices.forEach(d => {
