@@ -1,13 +1,18 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="dark">
+<html lang="en" data-bs-theme="light">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>QA Device Inventory · Hitwicket</title>
 <script>
-  // Apply the saved UI mode before first paint to avoid a flash of the wrong look.
-  // Default is "simple" (clean, readable) — users can switch to "fancy" (neon/mono) from the navbar.
-  try { document.documentElement.setAttribute('data-ui', localStorage.getItem('ui_mode') || 'simple'); } catch (e) {}
+  // Apply the saved color theme and UI mode before first paint to avoid a flash
+  // of the wrong look. Light is the default color theme; "simple" is the default
+  // UI mode. Both are per-browser preferences, changeable by any user (member or
+  // admin) from the navbar — nothing here is admin-gated.
+  try {
+    document.documentElement.setAttribute('data-bs-theme', localStorage.getItem('color_theme') || 'light');
+    document.documentElement.setAttribute('data-ui', localStorage.getItem('ui_mode') || 'simple');
+  } catch (e) {}
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -46,7 +51,25 @@ survives redeploys).
 =========================================================================
 -->
 <style>
-  :root, [data-bs-theme="dark"] {
+  :root, [data-bs-theme="light"] {
+    --bs-body-bg: #f6f7fb;
+    --bs-body-color: #16162f;
+    --bs-border-color: #e1e3f2;
+    --bs-secondary-bg: #ffffff;
+    --bs-tertiary-bg: #eef0fa;
+    --bs-emphasis-color: #0a0a1f;
+    --bs-primary: #7c3aed;
+    --bs-primary-rgb: 124,58,237;
+    --bs-link-color: #0891b2;
+    --bs-link-hover-color: #0e7490;
+    --accent: #7c3aed;
+    --cyan: #0891b2;
+    --grad: linear-gradient(135deg, var(--accent), var(--cyan));
+    --glow: 0 0 16px rgba(124,58,237,.18);
+    --disp: 'Orbitron', sans-serif;
+    --mono: 'JetBrains Mono', monospace;
+  }
+  [data-bs-theme="dark"] {
     --bs-body-bg: #06060f;
     --bs-body-color: #eeeef8;
     --bs-border-color: #22224a;
@@ -61,9 +84,26 @@ survives redeploys).
     --cyan: #06b6d4;
     --grad: linear-gradient(135deg, var(--accent), var(--cyan));
     --glow: 0 0 20px rgba(124,58,237,.35);
-    --disp: 'Orbitron', sans-serif;
-    --mono: 'JetBrains Mono', monospace;
   }
+  /* Bootstrap's .btn-close is dark-icon by default (fine on light);
+     invert it on dark theme instead of hardcoding a -white variant everywhere. */
+  [data-bs-theme="dark"] .btn-close { filter: invert(1) grayscale(100%) brightness(200%); }
+  .toast-themed { background: var(--bs-secondary-bg); color: var(--bs-body-color); border: 1px solid var(--bs-border-color) !important; }
+  [data-bs-theme="light"] .navbar-glass { background: rgba(255,255,255,.85) !important; }
+  [data-bs-theme="light"] .badge-soft-secondary { background: rgba(10,10,40,.06); color: #3d3d70; }
+  [data-bs-theme="light"] .badge-soft-success { color: #0f9d63; }
+  [data-bs-theme="light"] .badge-soft-warning { color: #b45309; }
+  [data-bs-theme="light"] .badge-soft-danger { color: #dc2626; }
+  [data-bs-theme="light"] .badge-soft-info { color: #0e7490; }
+  [data-bs-theme="light"] .login-card { background: rgba(255,255,255,.94); box-shadow: 0 25px 70px rgba(30,30,70,.15); }
+  [data-bs-theme="light"] .login-bg-overlay { background: linear-gradient(135deg, rgba(246,247,251,.93), rgba(124,58,237,.10), rgba(246,247,251,.9)); }
+  [data-bs-theme="light"] body::before { display: none; }
+  [data-bs-theme="light"] body::after {
+    background:
+      radial-gradient(ellipse 900px 600px at 8% -10%, rgba(124,58,237,.06) 0%, transparent 60%),
+      radial-gradient(ellipse 700px 500px at 95% 10%, rgba(6,182,212,.05) 0%, transparent 60%);
+  }
+  #colorThemeBtn i { font-size: .95rem; }
   /* ---------- SIMPLE MODE (default) — clean, readable, no mono/display font, no uppercase tracking ---------- */
   [data-ui="simple"] {
     --disp: 'Inter', system-ui, sans-serif;
@@ -186,6 +226,9 @@ survives redeploys).
         <span id="overdueBadge" class="badge badge-soft-warning mono d-none align-items-center gap-1 py-2 px-2">
           <i class="bi bi-exclamation-triangle"></i> <span id="overdueCount">0</span> overdue
         </span>
+        <button class="btn btn-outline-secondary btn-icon rounded-circle" id="colorThemeBtn" onclick="toggleColorTheme()" title="Switch color theme">
+          <i class="bi bi-sun"></i>
+        </button>
         <button class="btn btn-outline-secondary btn-icon rounded-circle" id="uiModeBtn" onclick="toggleUiMode()" title="Switch look">
           <i class="bi bi-stars"></i>
         </button>
@@ -201,7 +244,7 @@ survives redeploys).
             <span id="userName" class="d-none d-md-inline small fw-semibold">—</span>
             <span id="userRoleBadge" class="badge badge-soft-info mono d-none d-md-inline" style="font-size:.6rem">MEMBER</span>
           </button>
-          <ul class="dropdown-menu dropdown-menu-end dropdown-menu-dark">
+          <ul class="dropdown-menu dropdown-menu-end">
             <li><h6 class="dropdown-header" id="userEmailHeader">—</h6></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" href="#" onclick="signOut();return false;"><i class="bi bi-box-arrow-right me-2"></i>Sign out</a></li>
@@ -234,25 +277,25 @@ survives redeploys).
         <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
           Type <span class="badge badge-soft-info ms-1 d-none" id="mf-type-badge"></span>
         </button>
-        <div class="dropdown-menu dropdown-menu-dark p-2 dropdown-menu-check" id="mf-type-menu"></div>
+        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-type-menu"></div>
       </div>
       <div class="dropdown" id="mf-team">
         <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
           Team <span class="badge badge-soft-info ms-1 d-none" id="mf-team-badge"></span>
         </button>
-        <div class="dropdown-menu dropdown-menu-dark p-2 dropdown-menu-check" id="mf-team-menu"></div>
+        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-team-menu"></div>
       </div>
       <div class="dropdown" id="mf-inCharge">
         <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
           In Charge <span class="badge badge-soft-info ms-1 d-none" id="mf-inCharge-badge"></span>
         </button>
-        <div class="dropdown-menu dropdown-menu-dark p-2 dropdown-menu-check" id="mf-inCharge-menu"></div>
+        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-inCharge-menu"></div>
       </div>
       <div class="dropdown" id="mf-tier">
         <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
           Tier <span class="badge badge-soft-info ms-1 d-none" id="mf-tier-badge"></span>
         </button>
-        <div class="dropdown-menu dropdown-menu-dark p-2 dropdown-menu-check" id="mf-tier-menu"></div>
+        <div class="dropdown-menu p-2 dropdown-menu-check" id="mf-tier-menu"></div>
       </div>
       <button class="btn btn-outline-secondary" onclick="clearAllFilters()" title="Clear filters"><i class="bi bi-x-circle"></i></button>
 
@@ -299,10 +342,10 @@ survives redeploys).
 </div>
 
 <!-- ===================== ADMIN OFFCANVAS ===================== -->
-<div class="offcanvas offcanvas-end offcanvas-admin text-bg-dark" tabindex="-1" id="adminOffcanvas" data-bs-scroll="true">
+<div class="offcanvas offcanvas-end offcanvas-admin" tabindex="-1" id="adminOffcanvas" data-bs-scroll="true">
   <div class="offcanvas-header border-bottom border-secondary-subtle">
     <h5 class="offcanvas-title brand-title"><i class="bi bi-shield-lock me-2"></i>Admin</h5>
-    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas"></button>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
   </div>
   <div class="offcanvas-body">
     <ul class="nav nav-pills mb-3 gap-2 flex-wrap" id="adminTabs">
@@ -376,7 +419,7 @@ survives redeploys).
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title brand-title" id="deviceModalTitle">Add device</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
         <div class="field-section-label">Basic info</div>
@@ -434,7 +477,7 @@ survives redeploys).
 <div class="modal fade" id="checkoutModal" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
-      <div class="modal-header"><h5 class="modal-title">Check out device</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+      <div class="modal-header"><h5 class="modal-title">Check out device</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="modal-body">
         <p class="text-faint mb-3" id="checkoutDeviceLabel"></p>
         <div class="mb-3"><label class="form-label small text-faint mono">Who is taking it? *</label><input class="form-control" id="checkoutHolder"></div>
@@ -452,7 +495,7 @@ survives redeploys).
 <div class="modal fade" id="specsModal" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
-      <div class="modal-header"><h5 class="modal-title">Device specs</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+      <div class="modal-header"><h5 class="modal-title">Device specs</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="modal-body">
         <p class="text-faint mb-3" id="specsDeviceLabel"></p>
         <div class="row g-3" id="specsGrid"></div>
@@ -466,7 +509,7 @@ survives redeploys).
 <div class="modal fade" id="historyModal" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
-      <div class="modal-header"><h5 class="modal-title">Device history</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+      <div class="modal-header"><h5 class="modal-title">Device history</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="modal-body">
         <p class="text-faint mb-3" id="historyDeviceLabel"></p>
         <div id="historyList" class="d-flex flex-column gap-2"></div>
@@ -480,7 +523,7 @@ survives redeploys).
 <div class="modal fade" id="deleteModal" tabindex="-1">
   <div class="modal-dialog">
     <div class="modal-content">
-      <div class="modal-header"><h5 class="modal-title text-danger">Delete device</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+      <div class="modal-header"><h5 class="modal-title text-danger">Delete device</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="modal-body"><p id="deleteDeviceLabel">This can't be undone.</p></div>
       <div class="modal-footer">
         <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -627,6 +670,25 @@ function signOut() {
    BOOT
    ===================================================================== */
 /* =====================================================================
+   COLOR THEME — light (default) vs dark. Available to every user, not
+   just admins; stored per-browser in localStorage.
+   ===================================================================== */
+function toggleColorTheme() {
+  const html = document.documentElement;
+  const next = (html.getAttribute('data-bs-theme') || 'light') === 'light' ? 'dark' : 'light';
+  html.setAttribute('data-bs-theme', next);
+  try { localStorage.setItem('color_theme', next); } catch (e) {}
+  updateColorThemeBtn();
+}
+function updateColorThemeBtn() {
+  const btn = document.getElementById('colorThemeBtn');
+  if (!btn) return;
+  const cur = document.documentElement.getAttribute('data-bs-theme') || 'light';
+  btn.innerHTML = cur === 'light' ? '<i class="bi bi-sun"></i>' : '<i class="bi bi-moon-stars"></i>';
+  btn.title = cur === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
+}
+
+/* =====================================================================
    UI MODE — simple (default, readable) vs fancy (neon/mono). Available
    to every user, not just admins; stored per-browser in localStorage.
    ===================================================================== */
@@ -646,6 +708,7 @@ function updateUiModeBtn() {
 }
 
 window.addEventListener('load', () => {
+  updateColorThemeBtn();
   updateUiModeBtn();
   initGoogleWhenReady(20);
   if (session && session.token) {
@@ -1346,10 +1409,10 @@ function handleRestoreFile(e) {
 function toast(msg, isErr) {
   const wrap = document.getElementById('toastWrap');
   const el = document.createElement('div');
-  el.className = 'toast align-items-center border-0 ' + (isErr ? 'text-bg-danger' : 'text-bg-dark');
+  el.className = 'toast align-items-center border-0 ' + (isErr ? 'text-bg-danger' : 'toast-themed');
   el.setAttribute('role', 'alert');
   el.innerHTML = `<div class="d-flex"><div class="toast-body">${escapeHtml(msg)}</div>
-    <button class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>`;
+    <button class="btn-close me-2 m-auto" data-bs-dismiss="toast"></button></div>`;
   wrap.appendChild(el);
   const t = new bootstrap.Toast(el, { delay: 3800 });
   t.show();
