@@ -1,678 +1,478 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>QA Device Inventory · Hitwicket</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23122016'/><rect x='30' y='18' width='40' height='64' rx='7' fill='%2334a870'/><rect x='36' y='28' width='28' height='40' fill='%23122016'/><circle cx='50' cy='73' r='3' fill='%2334a870'/></svg>" />
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%23120a26'/><rect x='30' y='18' width='40' height='64' rx='7' fill='%237c3aed'/><rect x='36' y='28' width='28' height='40' fill='%23120a26'/><circle cx='50' cy='73' r='3' fill='%237c3aed'/></svg>" />
 
 <!--
 =========================================================================
-BACKEND CONTRACT — Cloudflare Worker + KV (build this side yourself)
+BACKEND CONTRACT — Cloudflare Worker + KV (src/index.js in this project)
 =========================================================================
-Set WORKER_URL and GOOGLE_CLIENT_ID in CONFIG below, then implement:
+Set WORKER_URL and GOOGLE_CLIENT_ID in CONFIG below. Set ADMIN_EMAILS in
+the Worker's wrangler.toml [vars] to seed the first admin(s) — after that,
+admins are managed from this app's hamburger menu (stored in KV, so it
+survives redeploys).
 
-  POST /api/auth
-    body:  { idToken }                          (Google GSI credential)
-    do:    verify idToken signature + aud == GOOGLE_CLIENT_ID
-           reject unless payload.hd === "hitwicket.com"
-           (or email.endsWith("@hitwicket.com") as a fallback check)
-           issue your own short-lived session token (signed, KV- or
-           JWT-backed) so you don't re-verify Google's token every call
-    return: 200 { sessionToken, user: { email, name, picture } }
-            401 { error } if domain check fails
+  POST   /api/auth                    { idToken } -> { sessionToken, user }
+  GET    /api/config                  -> { admins, options, customFields }
+  PUT    /api/config                  (admin) update config
+  GET    /api/devices                 -> [ Device ]
+  POST   /api/devices                 -> Device
+  PUT    /api/devices/:id             -> Device
+  POST   /api/devices/:id/checkout    { holder, purpose } -> Device
+  POST   /api/devices/:id/checkin     -> Device
+  DELETE /api/devices/:id             (admin)
+  POST   /api/devices/bulk-delete     (admin) { ids: [...] }
+  POST   /api/devices/restore         (admin) { data: [Device...] }
+  GET    /api/activity                (admin) -> [ {at,by,action,detail} ]
 
-  Every call below sends:  Authorization: Bearer <sessionToken>
-
-  GET  /api/devices
-    return: 200 [ Device, ... ]
-
-  POST /api/devices
-    body:  { name, type, assigned, notes }
-    return: 201 Device
-
-  PUT  /api/devices/:id
-    body:  { name, type, assigned, notes }        (edit, no status change)
-    return: 200 Device
-
-  POST /api/devices/:id/checkout
-    body:  { holder, purpose }
-    do:    set status="out", holder, purpose, lastCheckedOut=now,
-           append history entry { action:"checkout", by:<session user>,
-             detail:"Checked out to <holder> — <purpose>", at:now }
-    return: 200 Device
-
-  POST /api/devices/:id/checkin
-    do:    set status="in", holder=null, purpose=null, lastCheckedIn=now,
-           append history entry { action:"checkin", by:<session user>, at:now }
-    return: 200 Device
-
-  DELETE /api/devices/:id
-    return: 204
-
-  POST /api/devices/restore
-    body:  { data: [ Device, ... ] }              (bulk replace, from backup)
-    return: 200 { success:true }
-
-  Device shape:
-    {
-      id, name, type,            // type: "Phone" | "Tablet" | "Emulator" | "Other"
-      assigned,                  // default owner
-      status,                    // "in" | "out"
-      holder, purpose,           // set only while status == "out"
-      notes,
-      created, lastCheckedIn, lastCheckedOut,   // ISO timestamps
-      history: [ { action, by, detail, at } ]
-    }
+  Device: { id, name, type, deviceId, assigned, team, inCharge, personUsing,
+    tier, modelName, osVersion, ramSize, internalMemory, gpu, serialNo, imei,
+    custom: {ANY admin-defined field key -> value}, status, holder, purpose,
+    notes, created, lastCheckedIn, lastCheckedOut, history: [...] }
 =========================================================================
 -->
 <style>
-:root {
-  --bg: #06060f;
-  --bg-panel: #0d0d20;
-  --bg-panel-2: #111128;
-  --bg-raised: #161632;
-  --border: #1e1e3a;
-  --border-soft: #14142c;
-  --text: #eeeef8;
-  --text-dim: #9090c0;
-  --text-faint: #5050a0;
-  --accent: #7c3aed;
-  --accent-dim: #6025c9;
-  --accent-soft: rgba(124,58,237,0.16);
-  --cyan: #06b6d4;
-  --warn: #f59e0b;
-  --warn-soft: rgba(245,158,11,0.14);
-  --danger: #ef4444;
-  --danger-soft: rgba(239,68,68,0.14);
-  --shadow: rgba(0,0,0,0.5);
-  --radius: 10px;
-  --grad: linear-gradient(135deg, var(--accent), var(--cyan));
-  --glow: 0 0 20px rgba(124,58,237,.35);
-  --disp: 'Orbitron', sans-serif;
-  --body: 'Rajdhani', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --mono: 'JetBrains Mono', monospace;
-}
-[data-theme="light"] {
-  --bg: #f0f2fa;
-  --bg-panel: #ffffff;
-  --bg-panel-2: #f4f5fc;
-  --bg-raised: #ffffff;
-  --border: #d4d8ea;
-  --border-soft: #e4e6f4;
-  --text: #0a0a40;
-  --text-dim: #46468a;
-  --text-faint: #8888b8;
-  --accent: #6d28d9;
-  --accent-dim: #5b21b6;
-  --accent-soft: rgba(109,40,217,0.10);
-  --cyan: #0891b2;
-  --warn: #b5791c;
-  --warn-soft: rgba(181,121,28,.10);
-  --danger: #c73f37;
-  --danger-soft: rgba(199,63,55,.10);
-  --shadow: rgba(20,30,45,.12);
-}
+  :root, [data-bs-theme="dark"] {
+    --bs-body-bg: #06060f;
+    --bs-body-color: #eeeef8;
+    --bs-border-color: #22224a;
+    --bs-secondary-bg: #0d0d20;
+    --bs-tertiary-bg: #111128;
+    --bs-emphasis-color: #ffffff;
+    --bs-primary: #7c3aed;
+    --bs-primary-rgb: 124,58,237;
+    --bs-link-color: #22d3ee;
+    --bs-link-hover-color: #67e8f9;
+    --accent: #7c3aed;
+    --cyan: #06b6d4;
+    --grad: linear-gradient(135deg, var(--accent), var(--cyan));
+    --glow: 0 0 20px rgba(124,58,237,.35);
+    --disp: 'Orbitron', sans-serif;
+    --mono: 'JetBrains Mono', monospace;
+  }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    position: relative;
+    min-height: 100vh;
+  }
+  body::before {
+    content:''; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background-image:
+      linear-gradient(rgba(124,58,237,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,58,237,.05) 1px, transparent 1px);
+    background-size: 52px 52px;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 20%, transparent 100%);
+  }
+  body::after {
+    content:''; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background:
+      radial-gradient(ellipse 900px 600px at 8% -10%, rgba(124,58,237,.14) 0%, transparent 60%),
+      radial-gradient(ellipse 700px 500px at 95% 10%, rgba(6,182,212,.10) 0%, transparent 60%),
+      radial-gradient(ellipse 600px 500px at 50% 100%, rgba(124,58,237,.08) 0%, transparent 60%);
+  }
+  #app, header, footer { position: relative; z-index: 1; }
 
-* { box-sizing: border-box; }
-html, body { height: 100%; }
-body {
-  margin: 0;
-  font-family: var(--body);
-  font-weight: 500;
-  background: var(--bg);
-  color: var(--text);
-  -webkit-font-smoothing: antialiased;
-  font-size: 15px;
-}
-body::before {
-  content:''; position:fixed; inset:0; pointer-events:none; z-index:0;
-  background-image:
-    linear-gradient(rgba(124,58,237,.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(124,58,237,.05) 1px, transparent 1px);
-  background-size: 52px 52px;
-  mask-image: radial-gradient(ellipse 80% 80% at 50% 0%, black 30%, transparent 100%);
-}
-body::after {
-  content:''; position:fixed; inset:0; pointer-events:none; z-index:0;
-  background:
-    radial-gradient(ellipse 900px 600px at 10% -10%, rgba(124,58,237,.10) 0%, transparent 60%),
-    radial-gradient(ellipse 700px 500px at 90% 110%, rgba(6,182,212,.07) 0%, transparent 60%);
-}
-[data-theme="light"] body::before, [data-theme="light"] body::after { display: none; }
-
-h1,h2,h3, .num, .brand-word, .stat-value { font-family: var(--disp); letter-spacing: 1px; }
-
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 3px; box-shadow: 0 0 6px var(--accent); }
-
-a { color: inherit; }
-
-/* ---------- layout shell ---------- */
-.shell { max-width: 1180px; margin: 0 auto; padding: 0 20px 64px; position: relative; z-index: 1; }
-
-header.top {
-  position: sticky; top: 0; z-index: 40;
-  background: rgba(6,6,15,.92);
-  border-bottom: 1px solid var(--border-soft);
-  backdrop-filter: blur(20px);
-}
-[data-theme="light"] header.top { background: rgba(240,242,250,.95); }
-header.top::after {
-  content:''; position:absolute; bottom:0; left:0; right:0; height:1px;
-  background: linear-gradient(90deg, transparent, var(--accent), var(--cyan), var(--accent), transparent);
-  opacity: .5;
-}
-.top-inner {
-  max-width: 1180px; margin: 0 auto;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 13px 20px; gap: 12px; position: relative; z-index: 1;
-}
-.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.brand-mark {
-  width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0;
-  background: var(--accent-soft); border: 1px solid rgba(124,58,237,.3);
-  display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 0 14px rgba(124,58,237,.2);
-}
-.brand-text { line-height: 1.15; min-width: 0; }
-.brand-word {
-  font-size: 1rem; font-weight: 800; letter-spacing: 2px; text-transform: uppercase;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  background: var(--grad); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
-}
-.brand-sub { font-family: var(--mono); font-size: 0.62rem; color: var(--text-faint); letter-spacing: 2.5px; text-transform: uppercase; margin-top: 2px; }
-
-.top-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-
-.live-pill {
-  display: flex; align-items: center; gap: 6px;
-  font-family: var(--mono); font-size: 0.68rem; color: var(--text-dim);
-  padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border-soft);
-  background: var(--bg-panel); white-space: nowrap; letter-spacing: .5px;
-}
-.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 2.2s infinite; }
-.live-dot.stale { background: var(--text-faint); animation: none; box-shadow: none; }
-@keyframes pulse { 0%,100%{opacity:1} 55%{opacity:.3} }
-
-.icon-btn {
-  width: 36px; height: 36px; border-radius: 9px;
-  border: 1px solid var(--border-soft); background: var(--bg-panel);
-  color: var(--text-dim); display: flex; align-items: center; justify-content: center;
-  cursor: pointer; flex-shrink: 0; transition: all .15s;
-}
-.icon-btn:hover { color: var(--text); border-color: var(--accent); box-shadow: var(--glow); }
-
-.user-chip {
-  display: flex; align-items: center; gap: 8px;
-  padding: 4px 10px 4px 4px; border-radius: 999px;
-  border: 1px solid var(--border-soft); background: var(--bg-panel);
-  cursor: pointer; transition: border-color .15s;
-}
-.user-chip:hover { border-color: var(--accent); }
-.user-chip img { width: 26px; height: 26px; border-radius: 50%; display: block; }
-.user-chip .avatar-fallback {
-  width: 26px; height: 26px; border-radius: 50%;
-  background: var(--grad); color: #fff; font-family: var(--mono); font-size: 0.7rem; font-weight: 700;
-  display: flex; align-items: center; justify-content: center;
-}
-.user-chip span { font-size: 0.82rem; font-weight: 700; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* ---------- gate (logged out) ---------- */
-.gate {
-  max-width: 400px; margin: 14vh auto 0; text-align: center;
-  padding: 40px 32px 34px; background: var(--bg-panel);
-  border: 1px solid var(--border-soft); border-radius: 18px;
-  box-shadow: 0 20px 60px rgba(0,0,0,.4);
-  position: relative; z-index: 1;
-}
-.gate-mark {
-  width: 56px; height: 56px; border-radius: 15px; background: var(--accent-soft);
-  border: 1px solid rgba(124,58,237,.3); box-shadow: 0 0 20px rgba(124,58,237,.25);
-  margin: 0 auto 18px; display: flex; align-items: center; justify-content: center;
-}
-.gate h1 { font-size: 1.15rem; font-weight: 800; letter-spacing: 2px; margin: 0 0 6px;
-  background: var(--grad); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-.gate p { color: var(--text-dim); font-size: 0.88rem; margin: 0 0 24px; line-height: 1.5; font-weight: 500; }
-#gsiButton { display: flex; justify-content: center; }
-.gate-note { margin-top: 18px; font-family: var(--mono); font-size: 0.68rem; color: var(--text-faint); letter-spacing: .5px; }
-
-/* ---------- stats ---------- */
-.stats { display: grid; grid-template-columns: repeat(auto-fit,minmax(120px,1fr)); gap: 12px; margin: 22px 0 18px; }
-.stat-card {
-  background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: 12px;
-  padding: 15px 17px; position: relative; overflow: hidden; transition: border-color .2s, box-shadow .2s;
-}
-.stat-card:hover { border-color: var(--accent); box-shadow: var(--glow); }
-.stat-card .stat-label { font-family: var(--mono); font-size: 0.65rem; letter-spacing: 2px; text-transform: uppercase; color: var(--text-faint); margin-bottom: 6px; }
-.stat-card .stat-value { font-size: 1.7rem; font-weight: 800; line-height: 1; letter-spacing: -.5px; }
-.stat-card.in .stat-value { color: #34d399; }
-.stat-card.out .stat-value { color: var(--text); }
-.stat-card.overdue .stat-value { color: var(--warn); }
-
-/* ---------- toolbar ---------- */
-.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-.search-wrap { position: relative; flex: 1; min-width: 200px; }
-.search-wrap svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); opacity: .5; }
-input[type="text"], input[type="search"], select, textarea {
-  font-family: var(--body); font-weight: 600; font-size: 0.92rem;
-  background: var(--bg-panel); color: var(--text);
-  border: 1px solid var(--border-soft); border-radius: 8px;
-  padding: 8px 12px; outline: none; transition: border-color .15s, box-shadow .15s;
-}
-.search-wrap input { width: 100%; padding-left: 34px; }
-input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-
-.filter-tabs { display: flex; gap: 3px; background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: 8px; padding: 3px; }
-.filter-tabs button {
-  border: none; background: transparent; color: var(--text-dim);
-  font-family: var(--mono); font-size: 0.72rem; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
-  padding: 6px 13px; border-radius: 6px; cursor: pointer; transition: all .12s;
-}
-.filter-tabs button.active { background: var(--accent-soft); color: var(--cyan); text-shadow: 0 0 8px rgba(6,182,212,.4); }
-
-.btn {
-  font-family: var(--mono); font-size: 0.74rem; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
-  border: 1px solid transparent; border-radius: 8px; padding: 9px 15px;
-  cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; transition: all .15s;
-}
-.btn-primary { background: linear-gradient(135deg, var(--accent), #5b21b6); color: #fff; box-shadow: 0 4px 16px rgba(124,58,237,.35); }
-.btn-primary:hover { background: linear-gradient(135deg, #8b5cf6, var(--accent)); transform: translateY(-1px); box-shadow: 0 6px 22px rgba(124,58,237,.5); }
-.btn-ghost { background: var(--bg-panel); color: var(--text-dim); border-color: var(--border-soft); }
-.btn-ghost:hover { border-color: var(--accent); color: var(--cyan); background: var(--accent-soft); }
-.btn-sm { padding: 6px 11px; font-size: 0.66rem; }
-
-/* ---------- add device panel ---------- */
-.add-panel {
-  background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--radius);
-  padding: 18px; margin-bottom: 18px; display: none; box-shadow: var(--glow);
-}
-.add-panel.open { display: block; }
-.add-grid { display: grid; grid-template-columns: 1.4fr 1fr 1.2fr; gap: 10px; margin-bottom: 10px; }
-.add-grid label, .field label {
-  display: block; font-family: var(--mono); font-size: 0.64rem; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
-  color: var(--text-faint); margin-bottom: 5px;
-}
-.field { margin-bottom: 10px; }
-.add-panel input, .add-panel select, .add-panel textarea { width: 100%; }
-
-/* ---------- table ---------- */
-.table-card { background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: 12px; overflow: hidden; box-shadow: 0 4px 32px rgba(0,0,0,.25); }
-table { width: 100%; border-collapse: collapse; }
-thead th {
-  text-align: left; font-family: var(--mono); font-size: 0.62rem; font-weight: 700; color: var(--text-faint);
-  text-transform: uppercase; letter-spacing: 2px;
-  padding: 11px 14px; border-bottom: 1px solid var(--border-soft);
-  background: var(--bg-panel-2); cursor: pointer; user-select: none; white-space: nowrap;
-}
-thead th:hover { color: var(--cyan); }
-thead th .sort-arrow { opacity: .5; font-size: 0.7rem; margin-left: 3px; }
-tbody td { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,.03); vertical-align: top; font-size: 0.9rem; font-weight: 600; }
-[data-theme="light"] tbody td { border-bottom-color: var(--border-soft); }
-tbody tr:last-child td { border-bottom: none; }
-tbody tr:hover { background: rgba(124,58,237,.07); }
-tbody tr.flash { animation: flashRow 1.6s ease; }
-@keyframes flashRow { 0% { background: var(--accent-soft); } 100% { background: transparent; } }
-
-.device-cell { display: flex; align-items: center; gap: 10px; }
-.device-icon { width: 30px; height: 30px; border-radius: 8px; background: var(--bg-raised); border: 1px solid var(--border-soft); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.device-name { font-weight: 700; letter-spacing: .2px; }
-.device-type { font-family: var(--mono); font-size: 0.68rem; color: var(--text-faint); letter-spacing: .5px; text-transform: uppercase; margin-top: 2px; }
-
-.avatar-badge {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; border-radius: 50%;
-  font-family: var(--mono); font-size: 0.62rem; font-weight: 700; color: #fff; margin-right: 6px; flex-shrink: 0;
-}
-.assigned-cell { display: flex; align-items: center; }
-
-.pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; font-family: var(--mono); font-size: 0.68rem; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; border: 1px solid transparent; }
-.pill-in { background: rgba(16,185,129,.12); color: #34d399; border-color: rgba(16,185,129,.28); }
-.pill-out { background: var(--bg-raised); color: var(--text-dim); border-color: var(--border); }
-.pill-overdue { background: var(--warn-soft); color: var(--warn); border-color: rgba(245,158,11,.3); box-shadow: 0 0 8px rgba(245,158,11,.15); }
-.pill svg { width: 8px; height: 8px; }
-
-.activity-line { font-size: 0.84rem; font-weight: 600; }
-.activity-sub { font-family: var(--mono); font-size: 0.66rem; color: var(--text-faint); margin-top: 2px; letter-spacing: .3px; }
-.overdue-tag { color: var(--warn); font-weight: 700; }
-
-.row-actions { display: flex; flex-wrap: wrap; gap: 5px; }
-.row-actions .btn { padding: 5px 9px; font-size: 0.6rem; border-radius: 6px; letter-spacing: .5px; }
-.act-out { background: var(--bg-raised); color: var(--text); border-color: var(--border); }
-.act-in { background: rgba(16,185,129,.12); color: #34d399; border-color: rgba(16,185,129,.25); }
-.act-edit { background: transparent; color: var(--text-dim); border-color: var(--border-soft); }
-.act-hist { background: transparent; color: var(--text-dim); border-color: var(--border-soft); }
-.act-del { background: rgba(239,68,68,.08); color: #f87171; border-color: rgba(239,68,68,.2); }
-
-.empty-state { text-align: center; padding: 48px 20px; color: var(--text-faint); }
-.empty-state svg { opacity: .35; margin-bottom: 10px; }
-
-/* ---------- modals ---------- */
-.modal { display: none; position: fixed; inset: 0; background: rgba(4,4,10,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center; z-index: 100; padding: 16px; }
-.modal.open { display: flex; }
-.modal-card { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 18px; width: 100%; max-width: 440px; padding: 22px; max-height: 85vh; overflow-y: auto; position: relative; box-shadow: 0 20px 70px rgba(0,0,0,.55); }
-.modal-card::before { content:''; position:absolute; top:0; left:0; width:100%; height:2px; background: var(--grad); border-radius: 18px 18px 0 0; opacity: .8; }
-.modal-title { font-family: var(--disp); font-weight: 800; font-size: 1rem; letter-spacing: 1px; margin-bottom: 4px; }
-.modal-sub { font-size: 0.82rem; color: var(--text-dim); margin-bottom: 16px; font-weight: 600; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-
-.history-item { padding: 10px 0; border-bottom: 1px solid var(--border-soft); font-size: 0.85rem; }
-.history-item:last-child { border-bottom: none; }
-.history-item .h-detail { margin-bottom: 3px; font-weight: 600; }
-.history-item .h-meta { font-family: var(--mono); font-size: 0.66rem; color: var(--text-faint); letter-spacing: .3px; }
-
-/* ---------- toasts ---------- */
-.toast-wrap { position: fixed; bottom: 18px; right: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 200; max-width: 320px; }
-.toast { background: var(--bg-raised); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 9px; padding: 11px 14px; font-size: 0.84rem; font-weight: 600; box-shadow: 0 8px 30px rgba(0,0,0,.5); animation: toastIn .25s ease; }
-.toast.err { border-left-color: var(--danger); }
-@keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-
-footer.app-footer { text-align: center; padding: 30px 0 10px; color: var(--text-faint); font-family: var(--mono); font-size: 0.68rem; letter-spacing: .5px; position: relative; z-index: 1; }
-
-/* ---------- specs modal ---------- */
-.specs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 4px 0 6px; }
-.specs-item .specs-label { font-family: var(--mono); font-size: 0.62rem; color: var(--text-faint); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 3px; }
-.specs-item .specs-value { font-size: 0.87rem; font-weight: 700; word-break: break-word; }
-.field-section-label { font-family: var(--mono); font-size: 0.64rem; font-weight: 700; color: var(--cyan); text-transform: uppercase; letter-spacing: 2px; margin: 14px 0 8px; }
-.field-section-label:first-child { margin-top: 0; }
-.tier-badge { display: inline-flex; padding: 2px 9px; border-radius: 999px; font-family: var(--mono); font-size: 0.62rem; font-weight: 700; letter-spacing: .5px; background: var(--accent-soft); color: var(--cyan); border: 1px solid rgba(6,182,212,.3); margin-left: 6px; text-transform: uppercase; }
-
-/* ---------- responsive ---------- */
-@media (max-width: 860px) {
-  .stats { grid-template-columns: repeat(2, 1fr); }
-  .add-grid { grid-template-columns: 1fr; }
-  .table-card { overflow-x: auto; }
-  table { min-width: 720px; }
-  .specs-grid { grid-template-columns: 1fr; }
-}
-@media (max-width: 480px) {
-  .brand-sub { display: none; }
-  .user-chip span { display: none; }
-  .stats { grid-template-columns: repeat(2, 1fr); }
-}
+  .brand-title { font-family: var(--disp); font-weight: 800; letter-spacing: 1.5px;
+    background: var(--grad); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .mono { font-family: var(--mono); }
+  .text-faint { color: #7a7ab0 !important; }
+  .card-glow:hover { box-shadow: var(--glow); border-color: var(--accent) !important; }
+  .navbar-glass { background: rgba(6,6,15,.85) !important; backdrop-filter: blur(16px); border-bottom: 1px solid var(--bs-border-color); }
+  .table-glow tbody tr:hover { background: rgba(124,58,237,.08); }
+  .btn-grad { background: var(--grad); border: none; color: #fff; font-weight: 600; }
+  .btn-grad:hover { filter: brightness(1.12); color: #fff; box-shadow: var(--glow); }
+  .badge-soft-success { background: rgba(16,185,129,.15); color: #34d399; border: 1px solid rgba(16,185,129,.3); }
+  .badge-soft-secondary { background: rgba(255,255,255,.06); color: #b7b7e0; border: 1px solid var(--bs-border-color); }
+  .badge-soft-warning { background: rgba(245,158,11,.15); color: #fbbf24; border: 1px solid rgba(245,158,11,.3); }
+  .badge-soft-danger { background: rgba(239,68,68,.15); color: #f87171; border: 1px solid rgba(239,68,68,.3); }
+  .badge-soft-info { background: rgba(6,182,212,.15); color: #22d3ee; border: 1px solid rgba(6,182,212,.3); }
+  .specs-line { font-family: var(--mono); font-size: .72rem; color: #8888c0; }
+  .avatar-circle { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: .65rem; font-weight: 700; color: #fff; flex-shrink: 0; }
+  .dropdown-menu-check { max-height: 260px; overflow-y: auto; }
+  .dropdown-menu-check .form-check { padding-left: 1.9rem; }
+  .chip-remove { cursor: pointer; margin-left: 6px; opacity: .7; }
+  .chip-remove:hover { opacity: 1; }
+  .offcanvas-admin { width: 420px; max-width: 95vw; }
+  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; position: relative; overflow: hidden; }
+  .login-bg-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; opacity: .35; }
+  .login-bg-overlay { position: absolute; inset: 0; z-index: 1;
+    background: linear-gradient(135deg, rgba(6,6,15,.92), rgba(124,58,237,.14), rgba(6,6,15,.9)); }
+  .login-card { max-width: 420px; width: 100%; background: rgba(13,13,32,.9); border: 1px solid var(--bs-border-color); border-radius: 20px; padding: 42px 34px 32px; text-align: center; box-shadow: 0 25px 80px rgba(0,0,0,.55); backdrop-filter: blur(10px); position: relative; z-index: 2; overflow: hidden; }
+  .login-card::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; background: var(--grad); }
+  .login-logo { width: 84px; height: 84px; border-radius: 20px; object-fit: contain; background: rgba(255,255,255,.04); padding: 12px; margin-bottom: 18px; box-shadow: var(--glow); }
+  .stat-card { border-radius: 14px; background: var(--bs-secondary-bg); border: 1px solid var(--bs-border-color); padding: 14px 18px; transition: all .15s; }
+  .stat-num { font-family: var(--disp); font-size: 1.7rem; font-weight: 800; }
+  .table > :not(caption) > * > * { background: transparent; }
+  .nav-pills .nav-link.active { background: var(--grad); }
+  .modal-content, .offcanvas { border: 1px solid var(--bs-border-color); }
+  .modal-header { border-bottom-color: var(--bs-border-color); }
+  .modal-footer { border-top-color: var(--bs-border-color); }
+  .btn-icon { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+  #bulkBar { display: none; }
+  #bulkBar.show { display: flex; }
+  .cursor-pointer { cursor: pointer; }
+  .field-section-label { font-family: var(--mono); font-size: .68rem; letter-spacing: 1.5px; text-transform: uppercase; color: var(--cyan); margin: 14px 0 8px; }
+  .field-section-label:first-child { margin-top: 0; }
 </style>
 </head>
 <body>
 
-<header class="top">
-  <div class="top-inner">
-    <div class="brand">
-      <div class="brand-mark">
-        <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><rect x="7" y="2" width="10" height="20" rx="2.5" stroke="#7c3aed" stroke-width="1.7"/><path d="M9 5h6" stroke="#7c3aed" stroke-width="1.7" stroke-linecap="round"/></svg>
-      </div>
-      <div class="brand-text">
-        <div class="brand-word">DeviceOps</div>
-        <div class="brand-sub">Hitwicket &middot; QA Device Inventory</div>
-      </div>
+<!-- ===================== LOGIN GATE ===================== -->
+<div id="gate" class="login-wrap">
+  <video class="login-bg-video" autoplay muted loop playsinline
+    onerror="this.remove()">
+    <source src="https://cdn.octathorpeweb.com/v1/webstore/webstore-login.mp4" type="video/mp4">
+  </video>
+  <div class="login-bg-overlay"></div>
+  <div class="login-card">
+    <img class="login-logo" src="https://cdn.octathorpeweb.com/v1/webstore/hitwicket-logo.png" alt="Hitwicket"
+      onerror="this.outerHTML='&lt;div class=\'login-logo d-flex align-items-center justify-content-center fs-1\'&gt;🏏&lt;/div&gt;'">
+    <h1 class="brand-title fs-4 mb-1">QA Device Inventory</h1>
+    <p class="text-faint small mb-4">Sign in with your Hitwicket Google account to view and manage the test device pool.</p>
+    <div id="gsiButton" class="d-flex justify-content-center"></div>
+    <div id="gsiLoadError" class="alert alert-warning d-none mt-3 mb-0 py-2 px-3 small text-start">
+      <i class="bi bi-exclamation-triangle me-1"></i>
+      Couldn't load Google Sign-In — this can happen on the first load of a slow connection.
+      <button class="btn btn-sm btn-outline-warning mt-2 w-100" onclick="retryGoogleInit()">Try again</button>
     </div>
-    <div class="top-actions" id="topActions">
-      <!-- populated by JS: live pill + theme toggle + user chip -->
-    </div>
-  </div>
-</header>
-
-<div class="shell">
-
-  <!-- Logged-out gate -->
-  <div class="gate" id="gate">
-    <div class="gate-mark">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="7" y="2" width="10" height="20" rx="2.5" stroke="#7c3aed" stroke-width="1.7"/><path d="M9 5h6" stroke="#7c3aed" stroke-width="1.7" stroke-linecap="round"/></svg>
-    </div>
-    <h1>QA Device Inventory</h1>
-    <p>Sign in with your Hitwicket Google account to view and manage the test device pool.</p>
-    <div id="gsiButton"></div>
-    <div class="gate-note">Access is limited to @hitwicket.com accounts.</div>
-  </div>
-
-  <!-- Main app (shown once authenticated) -->
-  <div id="app" style="display:none;">
-
-    <div class="stats">
-      <div class="stat-card"><div class="stat-label">Total devices</div><div class="stat-value" id="statTotal">0</div></div>
-      <div class="stat-card in"><div class="stat-label">Checked in</div><div class="stat-value" id="statIn">0</div></div>
-      <div class="stat-card out"><div class="stat-label">Checked out</div><div class="stat-value" id="statOut">0</div></div>
-      <div class="stat-card overdue"><div class="stat-label">Overdue (48h+)</div><div class="stat-value" id="statOverdue">0</div></div>
-    </div>
-
-    <div class="toolbar">
-      <div class="search-wrap">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <input type="search" id="searchInput" placeholder="Search device, owner, team, ID, serial, IMEI…" />
-      </div>
-      <div class="filter-tabs" id="filterTabs">
-        <button class="active" data-filter="all">All</button>
-        <button data-filter="in">In</button>
-        <button data-filter="out">Out</button>
-        <button data-filter="overdue">Overdue</button>
-      </div>
-      <button class="btn btn-primary" id="toggleAddBtn">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-        Add device
-      </button>
-      <button class="btn btn-ghost" id="backupBtn">Export</button>
-      <button class="btn btn-ghost" id="restoreBtn">Import</button>
-      <input type="file" id="restoreFile" accept=".json" style="display:none;" />
-    </div>
-
-    <div class="add-panel" id="addPanel">
-      <div class="field-section-label">Basic info</div>
-      <div class="add-grid">
-        <div>
-          <label for="deviceName">Device name / model *</label>
-          <input type="text" id="deviceName" placeholder="e.g. Pixel 7a — Android 15" />
-        </div>
-        <div>
-          <label for="deviceType">Type</label>
-          <select id="deviceType">
-            <option>Phone</option>
-            <option>Tablet</option>
-            <option>Emulator</option>
-            <option>Other</option>
-          </select>
-        </div>
-        <div>
-          <label for="deviceIdField">Device ID</label>
-          <input type="text" id="deviceIdField" placeholder="Asset tag / internal ID" />
-        </div>
-      </div>
-
-      <div class="field-section-label">Ownership</div>
-      <div class="add-grid">
-        <div>
-          <label for="deviceOwner">Default owner *</label>
-          <input type="text" id="deviceOwner" placeholder="Who this device belongs to" />
-        </div>
-        <div>
-          <label for="deviceTeam">Team</label>
-          <input type="text" id="deviceTeam" placeholder="e.g. QA, Dev, Design" />
-        </div>
-        <div>
-          <label for="deviceInCharge">In charge</label>
-          <input type="text" id="deviceInCharge" placeholder="Owner / responsible person" />
-        </div>
-      </div>
-      <div class="add-grid">
-        <div>
-          <label for="devicePersonUsing">Person using</label>
-          <input type="text" id="devicePersonUsing" placeholder="Currently using it" />
-        </div>
-        <div>
-          <label for="deviceTier">Tier</label>
-          <input type="text" id="deviceTier" placeholder="e.g. Tier 1 / Flagship" />
-        </div>
-        <div></div>
-      </div>
-
-      <div class="field-section-label">Specs</div>
-      <div class="add-grid">
-        <div>
-          <label for="deviceModelName">Model name</label>
-          <input type="text" id="deviceModelName" placeholder="e.g. Pixel 7a" />
-        </div>
-        <div>
-          <label for="deviceOsVersion">OS version</label>
-          <input type="text" id="deviceOsVersion" placeholder="e.g. Android 15" />
-        </div>
-        <div>
-          <label for="deviceGpu">GPU</label>
-          <input type="text" id="deviceGpu" placeholder="e.g. Adreno 725" />
-        </div>
-      </div>
-      <div class="add-grid">
-        <div>
-          <label for="deviceRam">RAM size</label>
-          <input type="text" id="deviceRam" placeholder="e.g. 8GB" />
-        </div>
-        <div>
-          <label for="deviceInternalMemory">Internal memory</label>
-          <input type="text" id="deviceInternalMemory" placeholder="e.g. 128GB" />
-        </div>
-        <div>
-          <label for="deviceSerialNo">Serial no.</label>
-          <input type="text" id="deviceSerialNo" placeholder="Serial number" />
-        </div>
-      </div>
-      <div class="add-grid">
-        <div>
-          <label for="deviceImei">IMEI</label>
-          <input type="text" id="deviceImei" placeholder="IMEI number" />
-        </div>
-        <div style="grid-column: span 2;">
-          <label for="deviceNotes">Notes</label>
-          <input type="text" id="deviceNotes" placeholder="OS quirks, region, rooted, etc." />
-        </div>
-      </div>
-
-      <div class="modal-actions" style="margin-top:4px;">
-        <button class="btn btn-ghost" id="cancelAddBtn">Cancel</button>
-        <button class="btn btn-primary" id="submitAddBtn">Add device</button>
-      </div>
-    </div>
-
-    <div class="table-card">
-      <table id="deviceTable" aria-label="Device inventory">
-        <thead>
-          <tr>
-            <th data-sort="name">Device <span class="sort-arrow"></span></th>
-            <th data-sort="deviceId">Device ID <span class="sort-arrow"></span></th>
-            <th data-sort="team">Team <span class="sort-arrow"></span></th>
-            <th data-sort="inCharge">In charge <span class="sort-arrow"></span></th>
-            <th data-sort="status">Status <span class="sort-arrow"></span></th>
-            <th data-sort="activity">Activity <span class="sort-arrow"></span></th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="deviceTbody"></tbody>
-      </table>
-    </div>
-
+    <div id="gsiAuthError" class="alert alert-danger d-none mt-3 mb-0 py-2 px-3 small text-start"></div>
+    <div class="text-faint mono small mt-4" style="letter-spacing:1px">RESTRICTED TO @HITWICKET.COM ACCOUNTS</div>
   </div>
 </div>
 
-<footer class="app-footer">© 2025 Kunal Jade · QA, Hitwicket</footer>
+<!-- ===================== APP SHELL ===================== -->
+<div id="app" class="d-none">
 
-<!-- Checkout modal -->
-<div class="modal" id="checkoutModal">
-  <div class="modal-card">
-    <div class="modal-title">Check out device</div>
-    <div class="modal-sub" id="checkoutDeviceLabel"></div>
-    <div class="field">
-      <label>Who is taking it? *</label>
-      <input type="text" id="checkoutHolder" placeholder="Name" />
+  <nav class="navbar navbar-expand-lg navbar-glass sticky-top py-2">
+    <div class="container-fluid px-3 px-lg-4">
+      <span class="navbar-brand brand-title fs-5 mb-0 d-flex align-items-center gap-2">
+        <i class="bi bi-phone-fill"></i> DEVICE INVENTORY
+      </span>
+      <div class="d-flex align-items-center gap-2 ms-auto">
+        <span id="livePill" class="badge badge-soft-success mono d-none d-sm-inline-flex align-items-center gap-1 py-2 px-2">
+          <span class="rounded-circle bg-success" style="width:6px;height:6px" id="liveDot"></span>
+          <span id="liveLabel">Live</span>
+        </span>
+        <span id="overdueBadge" class="badge badge-soft-warning mono d-none align-items-center gap-1 py-2 px-2">
+          <i class="bi bi-exclamation-triangle"></i> <span id="overdueCount">0</span> overdue
+        </span>
+        <button class="btn btn-outline-secondary btn-icon rounded-circle" onclick="refreshAll()" title="Refresh">
+          <i class="bi bi-arrow-clockwise"></i>
+        </button>
+        <button id="adminHamburgerBtn" class="btn btn-outline-secondary btn-icon rounded-circle d-none" data-bs-toggle="offcanvas" data-bs-target="#adminOffcanvas" title="Admin menu">
+          <i class="bi bi-list"></i>
+        </button>
+        <div class="dropdown">
+          <button class="btn btn-outline-secondary d-flex align-items-center gap-2 rounded-pill" data-bs-toggle="dropdown">
+            <span id="userAvatar" class="avatar-circle" style="background:var(--accent)">?</span>
+            <span id="userName" class="d-none d-md-inline small fw-semibold">—</span>
+            <span id="userRoleBadge" class="badge badge-soft-info mono d-none d-md-inline" style="font-size:.6rem">MEMBER</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end dropdown-menu-dark">
+            <li><h6 class="dropdown-header" id="userEmailHeader">—</h6></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="#" onclick="signOut();return false;"><i class="bi bi-box-arrow-right me-2"></i>Sign out</a></li>
+          </ul>
+        </div>
+      </div>
     </div>
-    <div class="field">
-      <label>Purpose (optional)</label>
-      <input type="text" id="checkoutPurpose" placeholder="e.g. Regression run for 2.14 release" />
+  </nav>
+
+  <div class="container-fluid px-3 px-lg-4 py-4" style="max-width:1360px">
+
+    <!-- STATS -->
+    <div class="row g-3 mb-4" id="statsRow"></div>
+
+    <!-- TOOLBAR -->
+    <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+      <div class="position-relative flex-grow-1" style="min-width:220px;max-width:360px">
+        <i class="bi bi-search position-absolute text-faint" style="left:12px;top:50%;transform:translateY(-50%)"></i>
+        <input type="search" id="searchInput" class="form-control ps-5" placeholder="Search device, owner, team, ID, serial, IMEI…">
+      </div>
+
+      <div class="btn-group" role="group" id="statusFilterTabs">
+        <button class="btn btn-outline-secondary active" data-filter="all">All</button>
+        <button class="btn btn-outline-secondary" data-filter="in">In</button>
+        <button class="btn btn-outline-secondary" data-filter="out">Out</button>
+        <button class="btn btn-outline-secondary" data-filter="overdue">Overdue</button>
+      </div>
+
+      <div class="dropdown" id="mf-type">
+        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+          Type <span class="badge badge-soft-info ms-1 d-none" id="mf-type-badge"></span>
+        </button>
+        <div class="dropdown-menu dropdown-menu-dark p-2 dropdown-menu-check" id="mf-type-menu"></div>
+      </div>
+      <div class="dropdown" id="mf-team">
+        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+          Team <span class="badge badge-soft-info ms-1 d-none" id="mf-team-badge"></span>
+        </button>
+        <div class="dropdown-menu dropdown-menu-dark p-2 dropdown-menu-check" id="mf-team-menu"></div>
+      </div>
+      <div class="dropdown" id="mf-inCharge">
+        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+          In Charge <span class="badge badge-soft-info ms-1 d-none" id="mf-inCharge-badge"></span>
+        </button>
+        <div class="dropdown-menu dropdown-menu-dark p-2 dropdown-menu-check" id="mf-inCharge-menu"></div>
+      </div>
+      <div class="dropdown" id="mf-tier">
+        <button class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="outside">
+          Tier <span class="badge badge-soft-info ms-1 d-none" id="mf-tier-badge"></span>
+        </button>
+        <div class="dropdown-menu dropdown-menu-dark p-2 dropdown-menu-check" id="mf-tier-menu"></div>
+      </div>
+      <button class="btn btn-outline-secondary" onclick="clearAllFilters()" title="Clear filters"><i class="bi bi-x-circle"></i></button>
+
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-outline-secondary" onclick="exportBackup()"><i class="bi bi-download me-1"></i>Export</button>
+        <button class="btn btn-outline-secondary" onclick="document.getElementById('restoreFile').click()"><i class="bi bi-upload me-1"></i>Import</button>
+        <input type="file" id="restoreFile" accept=".json" class="d-none">
+        <button class="btn btn-grad" data-bs-toggle="modal" data-bs-target="#deviceModal" onclick="openAddDevice()"><i class="bi bi-plus-lg me-1"></i>Add device</button>
+      </div>
     </div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('checkoutModal')">Cancel</button>
-      <button class="btn btn-primary" id="confirmCheckoutBtn">Check out</button>
+
+    <!-- BULK ACTION BAR (admin) -->
+    <div id="bulkBar" class="alert alert-secondary d-flex align-items-center gap-2 flex-wrap mb-3 py-2">
+      <span class="mono small" id="bulkCount">0 selected</span>
+      <button class="btn btn-sm btn-outline-light" onclick="bulkCheckin()"><i class="bi bi-box-arrow-in-down"></i> Check in selected</button>
+      <button class="btn btn-sm btn-outline-danger" onclick="bulkDelete()"><i class="bi bi-trash"></i> Delete selected</button>
+      <button class="btn btn-sm btn-outline-light ms-auto" onclick="clearBulkSelection()">Clear</button>
     </div>
+
+    <!-- TABLE -->
+    <div class="card bg-body-secondary border-secondary-subtle">
+      <div class="table-responsive">
+        <table class="table table-glow align-middle mb-0" id="deviceTable">
+          <thead>
+            <tr class="mono small text-uppercase text-faint">
+              <th style="width:34px" id="bulkSelectTh"></th>
+              <th class="cursor-pointer" data-sort="name">Device</th>
+              <th class="cursor-pointer" data-sort="deviceId">Device ID</th>
+              <th class="cursor-pointer" data-sort="team">Team</th>
+              <th class="cursor-pointer" data-sort="inCharge">In charge</th>
+              <th class="cursor-pointer" data-sort="status">Status</th>
+              <th>Activity</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="deviceTbody"></tbody>
+        </table>
+      </div>
+    </div>
+
   </div>
+
+  <footer class="text-center text-faint small mono py-4">© 2025 Kunal Jade · QA, Hitwicket</footer>
 </div>
 
-<!-- Edit modal -->
-<div class="modal" id="editModal">
-  <div class="modal-card">
-    <div class="modal-title">Edit device</div>
+<!-- ===================== ADMIN OFFCANVAS ===================== -->
+<div class="offcanvas offcanvas-end offcanvas-admin text-bg-dark" tabindex="-1" id="adminOffcanvas" data-bs-scroll="true">
+  <div class="offcanvas-header border-bottom border-secondary-subtle">
+    <h5 class="offcanvas-title brand-title"><i class="bi bi-shield-lock me-2"></i>Admin</h5>
+    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas"></button>
+  </div>
+  <div class="offcanvas-body">
+    <ul class="nav nav-pills mb-3 gap-2 flex-wrap" id="adminTabs">
+      <li class="nav-item"><button class="nav-link active" data-tab="fields">Fields</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="custom">Custom Fields</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="admins">Admins</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="activity">Activity</button></li>
+      <li class="nav-item"><button class="nav-link" data-tab="backup">Backup</button></li>
+    </ul>
 
-    <div class="field-section-label">Basic info</div>
-    <div class="field"><label>Device name</label><input type="text" id="editName" /></div>
-    <div class="field"><label>Type</label>
-      <select id="editType"><option>Phone</option><option>Tablet</option><option>Emulator</option><option>Other</option></select>
+    <div id="admin-tab-fields">
+      <p class="text-faint small">Manage the option lists used in the Type, Team and Tier dropdowns across the app.</p>
+      <div class="field-section-label">Type options</div>
+      <div id="chips-type" class="d-flex flex-wrap gap-2 mb-2"></div>
+      <div class="input-group input-group-sm mb-4">
+        <input type="text" class="form-control" id="new-opt-type" placeholder="Add a type…">
+        <button class="btn btn-outline-secondary" onclick="addOption('type')">Add</button>
+      </div>
+      <div class="field-section-label">Team options</div>
+      <div id="chips-team" class="d-flex flex-wrap gap-2 mb-2"></div>
+      <div class="input-group input-group-sm mb-4">
+        <input type="text" class="form-control" id="new-opt-team" placeholder="Add a team…">
+        <button class="btn btn-outline-secondary" onclick="addOption('team')">Add</button>
+      </div>
+      <div class="field-section-label">Tier options</div>
+      <div id="chips-tier" class="d-flex flex-wrap gap-2 mb-2"></div>
+      <div class="input-group input-group-sm mb-3">
+        <input type="text" class="form-control" id="new-opt-tier" placeholder="Add a tier…">
+        <button class="btn btn-outline-secondary" onclick="addOption('tier')">Add</button>
+      </div>
+      <button class="btn btn-grad w-100" onclick="saveAdminConfig()"><i class="bi bi-check-lg me-1"></i>Save changes</button>
     </div>
-    <div class="field"><label>Device ID</label><input type="text" id="editDeviceId" /></div>
 
-    <div class="field-section-label">Ownership</div>
-    <div class="field"><label>Default owner</label><input type="text" id="editOwner" /></div>
-    <div class="field"><label>Team</label><input type="text" id="editTeam" /></div>
-    <div class="field"><label>In charge</label><input type="text" id="editInCharge" /></div>
-    <div class="field"><label>Person using</label><input type="text" id="editPersonUsing" /></div>
-    <div class="field"><label>Tier</label><input type="text" id="editTier" /></div>
+    <div id="admin-tab-custom" class="d-none">
+      <p class="text-faint small">Add a brand-new tracked field — it will appear in the Add/Edit form and the Specs view for every device.</p>
+      <div id="chips-custom" class="d-flex flex-column gap-2 mb-3"></div>
+      <div class="input-group input-group-sm mb-3">
+        <input type="text" class="form-control" id="new-custom-label" placeholder="Field label, e.g. Warranty Expiry">
+        <button class="btn btn-outline-secondary" onclick="addCustomField()">Add field</button>
+      </div>
+      <button class="btn btn-grad w-100" onclick="saveAdminConfig()"><i class="bi bi-check-lg me-1"></i>Save changes</button>
+    </div>
 
-    <div class="field-section-label">Specs</div>
-    <div class="field"><label>Model name</label><input type="text" id="editModelName" /></div>
-    <div class="field"><label>OS version</label><input type="text" id="editOsVersion" /></div>
-    <div class="field"><label>RAM size</label><input type="text" id="editRam" /></div>
-    <div class="field"><label>Internal memory</label><input type="text" id="editInternalMemory" /></div>
-    <div class="field"><label>GPU</label><input type="text" id="editGpu" /></div>
-    <div class="field"><label>Serial no.</label><input type="text" id="editSerialNo" /></div>
-    <div class="field"><label>IMEI</label><input type="text" id="editImei" /></div>
-    <div class="field"><label>Notes</label><input type="text" id="editNotes" /></div>
+    <div id="admin-tab-admins" class="d-none">
+      <p class="text-faint small">Anyone on this list gets admin access — deleting devices, managing fields, and this menu. You can't remove yourself.</p>
+      <div id="chips-admins" class="d-flex flex-column gap-2 mb-3"></div>
+      <div class="input-group input-group-sm mb-3">
+        <input type="email" class="form-control" id="new-admin-email" placeholder="name@hitwicket.com">
+        <button class="btn btn-outline-secondary" onclick="addAdmin()">Add</button>
+      </div>
+      <button class="btn btn-grad w-100" onclick="saveAdminConfig()"><i class="bi bi-check-lg me-1"></i>Save changes</button>
+    </div>
 
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('editModal')">Cancel</button>
-      <button class="btn btn-primary" id="confirmEditBtn">Save</button>
+    <div id="admin-tab-activity" class="d-none">
+      <p class="text-faint small">Last 200 actions across the team.</p>
+      <div id="activityList" class="d-flex flex-column gap-2"></div>
+    </div>
+
+    <div id="admin-tab-backup" class="d-none">
+      <p class="text-faint small">Download a full JSON backup, or restore the entire inventory from one.</p>
+      <button class="btn btn-outline-secondary w-100 mb-2" onclick="exportBackup()"><i class="bi bi-download me-1"></i>Export all devices</button>
+      <button class="btn btn-outline-danger w-100" onclick="document.getElementById('restoreFile').click()"><i class="bi bi-upload me-1"></i>Restore from backup</button>
+      <div class="alert alert-warning small mt-3 mb-0"><i class="bi bi-exclamation-triangle me-1"></i>Restoring replaces the entire inventory.</div>
     </div>
   </div>
 </div>
 
-<!-- Delete modal -->
-<div class="modal" id="deleteModal">
-  <div class="modal-card">
-    <div class="modal-title">Delete device</div>
-    <div class="modal-sub" id="deleteDeviceLabel">This can't be undone.</div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('deleteModal')">Cancel</button>
-      <button class="btn" style="background:var(--danger);color:#fff;" id="confirmDeleteBtn">Delete</button>
+<!-- ===================== ADD / EDIT DEVICE MODAL ===================== -->
+<div class="modal fade" id="deviceModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title brand-title" id="deviceModalTitle">Add device</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="field-section-label">Basic info</div>
+        <div class="row g-3 mb-2">
+          <div class="col-md-6"><label class="form-label small text-faint mono">Device name / model *</label>
+            <input class="form-control" id="f-name" placeholder="e.g. Pixel 7a — Android 15"></div>
+          <div class="col-md-3"><label class="form-label small text-faint mono">Type</label>
+            <select class="form-select" id="f-type"></select></div>
+          <div class="col-md-3"><label class="form-label small text-faint mono">Device ID</label>
+            <input class="form-control" id="f-deviceId" placeholder="Asset tag"></div>
+        </div>
+        <div class="field-section-label">Ownership</div>
+        <div class="row g-3 mb-2">
+          <div class="col-md-4"><label class="form-label small text-faint mono">Default owner *</label>
+            <input class="form-control" id="f-assigned" placeholder="Who this device belongs to"></div>
+          <div class="col-md-4"><label class="form-label small text-faint mono">Team</label>
+            <select class="form-select" id="f-team"></select></div>
+          <div class="col-md-4"><label class="form-label small text-faint mono">In charge</label>
+            <input class="form-control" id="f-inCharge" placeholder="Owner / responsible person"></div>
+          <div class="col-md-4"><label class="form-label small text-faint mono">Person using</label>
+            <input class="form-control" id="f-personUsing" placeholder="Currently using it"></div>
+          <div class="col-md-4"><label class="form-label small text-faint mono">Tier</label>
+            <select class="form-select" id="f-tier"></select></div>
+        </div>
+        <div class="field-section-label">Specs</div>
+        <div class="row g-3 mb-2">
+          <div class="col-md-4"><label class="form-label small text-faint mono">Model name</label>
+            <input class="form-control" id="f-modelName" placeholder="e.g. Pixel 7a"></div>
+          <div class="col-md-4"><label class="form-label small text-faint mono">OS version</label>
+            <input class="form-control" id="f-osVersion" placeholder="e.g. Android 15"></div>
+          <div class="col-md-4"><label class="form-label small text-faint mono">GPU</label>
+            <input class="form-control" id="f-gpu" placeholder="e.g. Adreno 725"></div>
+          <div class="col-md-4"><label class="form-label small text-faint mono">RAM size</label>
+            <input class="form-control" id="f-ramSize" placeholder="e.g. 8GB"></div>
+          <div class="col-md-4"><label class="form-label small text-faint mono">Internal memory</label>
+            <input class="form-control" id="f-internalMemory" placeholder="e.g. 128GB"></div>
+          <div class="col-md-4"><label class="form-label small text-faint mono">Serial no.</label>
+            <input class="form-control" id="f-serialNo" placeholder="Serial number"></div>
+          <div class="col-md-4"><label class="form-label small text-faint mono">IMEI</label>
+            <input class="form-control" id="f-imei" placeholder="IMEI number"></div>
+          <div class="col-md-8"><label class="form-label small text-faint mono">Notes</label>
+            <input class="form-control" id="f-notes" placeholder="OS quirks, region, rooted, etc."></div>
+        </div>
+        <div id="customFieldsSection"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-grad" id="deviceSaveBtn" onclick="saveDevice()">Save device</button>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- History modal -->
-<div class="modal" id="historyModal">
-  <div class="modal-card">
-    <div class="modal-title">Device history</div>
-    <div class="modal-sub" id="historyDeviceLabel"></div>
-    <div id="historyList"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('historyModal')">Close</button>
+<!-- ===================== CHECKOUT MODAL ===================== -->
+<div class="modal fade" id="checkoutModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Check out device</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <p class="text-faint mb-3" id="checkoutDeviceLabel"></p>
+        <div class="mb-3"><label class="form-label small text-faint mono">Who is taking it? *</label><input class="form-control" id="checkoutHolder"></div>
+        <div class="mb-1"><label class="form-label small text-faint mono">Purpose (optional)</label><input class="form-control" id="checkoutPurpose" placeholder="e.g. Regression run for 2.14 release"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-grad" onclick="confirmCheckout()">Check out</button>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- Specs modal -->
-<div class="modal" id="specsModal">
-  <div class="modal-card">
-    <div class="modal-title">Device specs</div>
-    <div class="modal-sub" id="specsDeviceLabel"></div>
-    <div class="specs-grid" id="specsGrid"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('specsModal')">Close</button>
+<!-- ===================== SPECS MODAL ===================== -->
+<div class="modal fade" id="specsModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Device specs</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <p class="text-faint mb-3" id="specsDeviceLabel"></p>
+        <div class="row g-3" id="specsGrid"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button></div>
     </div>
   </div>
 </div>
 
-<div class="toast-wrap" id="toastWrap"></div>
+<!-- ===================== HISTORY MODAL ===================== -->
+<div class="modal fade" id="historyModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Device history</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <p class="text-faint mb-3" id="historyDeviceLabel"></p>
+        <div id="historyList" class="d-flex flex-column gap-2"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button></div>
+    </div>
+  </div>
+</div>
 
+<!-- ===================== DELETE CONFIRM MODAL ===================== -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title text-danger">Delete device</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body"><p id="deleteDeviceLabel">This can't be undone.</p></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== TOASTS ===================== -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index:2000" id="toastWrap"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
 <script>
 /* =====================================================================
-   CONFIG — fill these in once your Worker is live
+   CONFIG
    ===================================================================== */
 const CONFIG = {
   WORKER_URL: "https://device.bugs-ed9.workers.dev",
@@ -681,53 +481,99 @@ const CONFIG = {
   OVERDUE_HOURS: 48,
   POLL_ACTIVE_MS: 12000,
   POLL_IDLE_MS: 60000,
-  IDLE_AFTER_MS: 45000
+  IDLE_AFTER_MS: 45000,
+  SESSION_DAYS: 8
 };
+const SESSION_KEY = 'qa_dev_inv_session_v2';
 
 /* =====================================================================
    STATE
    ===================================================================== */
 let devices = [];
-let session = JSON.parse(localStorage.getItem('qa_session') || 'null'); // { token, user }
+let serverConfig = { admins: [], options: { type: [], team: [], tier: [] }, customFields: [] };
+let adminDraft = null; // staged edits while offcanvas is open
+let session = loadSession();
 let sortState = { key: 'name', dir: 1 };
-let activeFilter = 'all';
+let statusFilter = 'all';
+const MF_STATE = { type: new Set(), team: new Set(), inCharge: new Set(), tier: new Set() };
 let searchTerm = '';
 let pollTimer = null;
 let lastInteraction = Date.now();
 let lastSyncAt = null;
 let pendingCheckoutId = null, pendingEditId = null, pendingDeleteId = null;
+let bulkSelected = new Set();
+let gsiInited = false;
 
 /* =====================================================================
-   AUTH
+   SESSION (8 days)
    ===================================================================== */
-window.addEventListener('load', () => {
-  initTheme();
-  renderTopActions();
-  if (window.google && google.accounts) {
+function loadSession() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    if (!raw || !raw.token || !raw.ts) return null;
+    const ageMs = Date.now() - raw.ts;
+    if (ageMs > CONFIG.SESSION_DAYS * 24 * 3600 * 1000) { localStorage.removeItem(SESSION_KEY); return null; }
+    return raw;
+  } catch (e) { return null; }
+}
+function saveSession(token, user) {
+  session = { token, user, ts: Date.now() };
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch (e) {}
+}
+function clearSession() {
+  session = null;
+  try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+}
+
+/* =====================================================================
+   GOOGLE SIGN-IN — robust init (fixes first-load race condition)
+   ===================================================================== */
+function retryGoogleInit() {
+  document.getElementById('gsiLoadError').classList.add('d-none');
+  initGoogleWhenReady(20);
+}
+
+function initGoogleWhenReady(retriesLeft) {
+  if (window.google && google.accounts && google.accounts.id) {
+    setupGoogleSignIn();
+    return;
+  }
+  if (retriesLeft <= 0) {
+    document.getElementById('gsiLoadError').classList.remove('d-none');
+    return;
+  }
+  setTimeout(() => initGoogleWhenReady(retriesLeft - 1), 250);
+}
+
+function setupGoogleSignIn() {
+  if (gsiInited) return;
+  try {
     google.accounts.id.initialize({
       client_id: CONFIG.GOOGLE_CLIENT_ID,
-      callback: handleCredential
+      callback: handleCredential,
+      auto_select: false,
+      cancel_on_tap_outside: true,
+      use_fedcm_for_prompt: true
     });
-    google.accounts.id.renderButton(document.getElementById('gsiButton'), { theme: 'filled_black', size: 'large', shape: 'pill' });
+    google.accounts.id.renderButton(document.getElementById('gsiButton'), { theme: 'filled_black', size: 'large', shape: 'pill', width: 300 });
+    gsiInited = true;
+    // One-tap is best-effort; ignore if it doesn't display.
+    try { google.accounts.id.prompt(); } catch (e) {}
+  } catch (e) {
+    console.error('[gsi] init failed', e);
+    document.getElementById('gsiLoadError').classList.remove('d-none');
   }
-  if (session && session.token) {
-    showApp();
-  } else {
-    showGate();
-  }
-  ['mousemove','keydown','click','touchstart'].forEach(evt =>
-    document.addEventListener(evt, () => lastInteraction = Date.now(), { passive: true })
-  );
-  document.addEventListener('visibilitychange', schedulePoll);
-});
+}
 
 async function handleCredential(response) {
+  const errEl = document.getElementById('gsiAuthError');
+  errEl.classList.add('d-none');
   try {
     const idToken = response.credential;
-    // quick client-side domain check for instant feedback; the Worker re-verifies authoritatively
     const payload = JSON.parse(atob(idToken.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
     if (payload.hd !== CONFIG.ALLOWED_DOMAIN && !(payload.email || '').endsWith('@' + CONFIG.ALLOWED_DOMAIN)) {
-      toast('This tool is limited to @' + CONFIG.ALLOWED_DOMAIN + ' accounts.', true);
+      errEl.textContent = 'This tool is limited to @' + CONFIG.ALLOWED_DOMAIN + ' accounts.';
+      errEl.classList.remove('d-none');
       return;
     }
     const res = await fetch(CONFIG.WORKER_URL + '/api/auth', {
@@ -735,35 +581,90 @@ async function handleCredential(response) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ idToken })
     });
-    if (!res.ok) throw new Error('Sign-in rejected by server');
     const data = await res.json();
-    session = { token: data.sessionToken, user: data.user };
-    localStorage.setItem('qa_session', JSON.stringify(session));
-    showApp();
+    if (!res.ok) throw new Error(data.error || 'Sign-in rejected by server');
+    saveSession(data.sessionToken, data.user);
+    await showApp();
   } catch (err) {
-    console.error(err);
-    toast('Sign-in failed. Please try again.', true);
+    console.error('[auth]', err);
+    errEl.textContent = err.message || 'Sign-in failed. Please try again.';
+    errEl.classList.remove('d-none');
   }
 }
 
 function signOut() {
-  session = null;
-  localStorage.removeItem('qa_session');
+  clearSession();
   clearTimeout(pollTimer);
-  showGate();
+  try { google.accounts.id.disableAutoSelect(); } catch (e) {}
+  location.reload();
 }
 
-function showGate() {
-  document.getElementById('gate').style.display = 'block';
-  document.getElementById('app').style.display = 'none';
-  renderTopActions();
-}
+/* =====================================================================
+   BOOT
+   ===================================================================== */
+window.addEventListener('load', () => {
+  initGoogleWhenReady(20);
+  if (session && session.token) {
+    showApp();
+  }
+  ['mousemove','keydown','click','touchstart'].forEach(evt =>
+    document.addEventListener(evt, () => lastInteraction = Date.now(), { passive: true })
+  );
+  document.addEventListener('visibilitychange', schedulePoll);
 
-function showApp() {
-  document.getElementById('gate').style.display = 'none';
-  document.getElementById('app').style.display = 'block';
-  renderTopActions();
-  loadDevices();
+  document.getElementById('searchInput').addEventListener('input', e => { searchTerm = e.target.value; renderTable(); });
+  document.querySelectorAll('#statusFilterTabs button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#statusFilterTabs button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      statusFilter = btn.dataset.filter;
+      renderTable();
+    });
+  });
+  document.querySelectorAll('#deviceTable thead th[data-sort]').forEach(th => {
+    th.addEventListener('click', () => {
+      const key = th.dataset.sort;
+      if (sortState.key === key) sortState.dir *= -1; else { sortState.key = key; sortState.dir = 1; }
+      renderTable();
+    });
+  });
+  document.getElementById('restoreFile').addEventListener('change', handleRestoreFile);
+  document.querySelectorAll('#adminTabs button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#adminTabs button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      ['fields','custom','admins','activity','backup'].forEach(t => {
+        document.getElementById('admin-tab-' + t).classList.toggle('d-none', t !== btn.dataset.tab);
+      });
+      if (btn.dataset.tab === 'activity') loadActivity();
+    });
+  });
+  document.getElementById('adminOffcanvas').addEventListener('show.bs.offcanvas', () => {
+    adminDraft = JSON.parse(JSON.stringify(serverConfig));
+    renderAdminDraft();
+  });
+});
+
+async function showApp() {
+  document.getElementById('gate').classList.add('d-none');
+  document.getElementById('app').classList.remove('d-none');
+
+  const av = document.getElementById('userAvatar');
+  const nameEl = document.getElementById('userName');
+  const emailEl = document.getElementById('userEmailHeader');
+  const roleBadge = document.getElementById('userRoleBadge');
+  if (session.user.picture) av.innerHTML = `<img src="${session.user.picture}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`;
+  else { av.textContent = initialsFor(session.user.name); av.style.background = colorFor(session.user.name); }
+  nameEl.textContent = (session.user.name || '').split(' ')[0];
+  emailEl.textContent = session.user.email || '';
+  roleBadge.textContent = (session.user.role || 'member').toUpperCase();
+  roleBadge.classList.remove('d-none');
+  document.getElementById('adminHamburgerBtn').classList.toggle('d-none', session.user.role !== 'admin');
+  document.getElementById('bulkSelectTh').innerHTML = session.user.role === 'admin'
+    ? '<input type="checkbox" class="form-check-input" id="bulkSelectAll" onclick="toggleSelectAll(event)">' : '';
+
+  await loadConfig();
+  await loadDevices();
   schedulePoll();
 }
 
@@ -780,9 +681,14 @@ async function apiFetch(path, opts = {}) {
     }
   });
   if (res.status === 401) {
-    signOut();
+    clearSession();
     toast('Session expired — please sign in again.', true);
+    setTimeout(() => location.reload(), 1200);
     throw new Error('unauthorized');
+  }
+  if (res.status === 403) {
+    toast('Admin access required.', true);
+    throw new Error('forbidden');
   }
   if (!res.ok) {
     let msg = 'Request failed';
@@ -793,12 +699,21 @@ async function apiFetch(path, opts = {}) {
   return res.json();
 }
 
+async function loadConfig() {
+  try {
+    serverConfig = await apiFetch('/api/config');
+    populateFieldSelects();
+    populateFilterDropdowns();
+  } catch (e) { toast(e.message, true); }
+}
+
 async function loadDevices(silent) {
   try {
     const data = await apiFetch('/api/devices');
     const prevById = Object.fromEntries(devices.map(d => [d.id, d]));
     devices = data;
     lastSyncAt = Date.now();
+    populateFilterDropdowns();
     render();
     if (silent) flashChanged(prevById);
     setLive(true);
@@ -808,88 +723,78 @@ async function loadDevices(silent) {
   }
 }
 
+async function loadActivity() {
+  const el = document.getElementById('activityList');
+  el.innerHTML = '<div class="text-faint small">Loading…</div>';
+  try {
+    const log = await apiFetch('/api/activity');
+    if (!log.length) { el.innerHTML = '<div class="text-faint small">No activity yet.</div>'; return; }
+    el.innerHTML = log.map(a => `
+      <div class="border-bottom border-secondary-subtle pb-2">
+        <div class="small">${escapeHtml(a.detail || a.action)}</div>
+        <div class="text-faint mono" style="font-size:.68rem">${escapeHtml(a.by || 'Unknown')} · ${formatDate(a.at)} · ${escapeHtml(a.action)}</div>
+      </div>`).join('');
+  } catch (e) { el.innerHTML = '<div class="text-danger small">Could not load activity.</div>'; }
+}
+
 /* =====================================================================
-   ADAPTIVE POLLING (near-realtime without a socket)
+   POLLING
    ===================================================================== */
 function schedulePoll() {
   clearTimeout(pollTimer);
   if (!session || document.hidden) { pollTimer = setTimeout(schedulePoll, 4000); return; }
   const idle = (Date.now() - lastInteraction) > CONFIG.IDLE_AFTER_MS;
   const delay = idle ? CONFIG.POLL_IDLE_MS : CONFIG.POLL_ACTIVE_MS;
-  pollTimer = setTimeout(async () => {
-    await loadDevices(true);
-    schedulePoll();
-  }, delay);
+  pollTimer = setTimeout(async () => { await loadDevices(true); schedulePoll(); }, delay);
 }
-
 function flashChanged(prevById) {
   devices.forEach(d => {
     const prev = prevById[d.id];
     if (!prev) return;
     if (prev.status !== d.status || prev.holder !== d.holder) {
       const row = document.querySelector(`tr[data-id="${d.id}"]`);
-      if (row) { row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash'); }
+      if (row) { row.classList.remove('table-active'); void row.offsetWidth; row.classList.add('table-active'); setTimeout(() => row.classList.remove('table-active'), 1500); }
     }
   });
 }
-
-/* =====================================================================
-   RENDER — top bar, stats, table
-   ===================================================================== */
-function renderTopActions() {
-  const wrap = document.getElementById('topActions');
-  wrap.innerHTML = '';
-
-  const live = document.createElement('div');
-  live.className = 'live-pill';
-  live.id = 'livePill';
-  live.innerHTML = `<span class="live-dot" id="liveDot"></span><span id="liveLabel">${session ? 'Live' : 'Signed out'}</span>`;
-  wrap.appendChild(live);
-
-  const themeBtn = document.createElement('button');
-  themeBtn.className = 'icon-btn';
-  themeBtn.title = 'Toggle theme';
-  themeBtn.innerHTML = themeIconSvg();
-  themeBtn.onclick = toggleTheme;
-  wrap.appendChild(themeBtn);
-
-  if (session && session.user) {
-    const chip = document.createElement('div');
-    chip.className = 'user-chip';
-    chip.title = 'Sign out';
-    chip.onclick = signOut;
-    const initials = (session.user.name || session.user.email || '?').trim().split(/\s+/).map(s => s[0]).slice(0,2).join('').toUpperCase();
-    chip.innerHTML = (session.user.picture
-      ? `<img src="${session.user.picture}" alt="">`
-      : `<div class="avatar-fallback">${initials}</div>`)
-      + `<span>${escapeHtml(session.user.name || session.user.email)}</span>`;
-    wrap.appendChild(chip);
-  }
-}
-
 function setLive(ok) {
   const dot = document.getElementById('liveDot');
   const label = document.getElementById('liveLabel');
   if (!dot) return;
-  dot.classList.toggle('stale', !ok);
-  label.textContent = ok ? 'Live · synced ' + timeAgo(lastSyncAt) + ' ago' : 'Connection lost';
+  dot.className = 'rounded-circle ' + (ok ? 'bg-success' : 'bg-secondary');
+  label.textContent = ok ? 'Live · ' + timeAgo(lastSyncAt) : 'Offline';
 }
 setInterval(() => { if (session && lastSyncAt) setLive(true); }, 5000);
+async function refreshAll() { await loadConfig(); await loadDevices(); toast('Refreshed'); }
 
-function render() {
-  renderStats();
-  renderTable();
-}
+/* =====================================================================
+   RENDER
+   ===================================================================== */
+function render() { renderStats(); renderTable(); }
 
 function renderStats() {
   const total = devices.length;
   const inCount = devices.filter(d => d.status === 'in').length;
   const outCount = total - inCount;
-  const overdue = devices.filter(d => isOverdue(d)).length;
-  document.getElementById('statTotal').textContent = total;
-  document.getElementById('statIn').textContent = inCount;
-  document.getElementById('statOut').textContent = outCount;
-  document.getElementById('statOverdue').textContent = overdue;
+  const overdue = devices.filter(isOverdue).length;
+  const cards = [
+    ['Total devices', total, 'text-white'],
+    ['Checked in', inCount, 'text-success'],
+    ['Checked out', outCount, 'text-white'],
+    ['Overdue (48h+)', overdue, 'text-warning']
+  ];
+  document.getElementById('statsRow').innerHTML = cards.map(([label, val, cls]) => `
+    <div class="col-6 col-lg-3">
+      <div class="stat-card card-glow">
+        <div class="text-faint mono small text-uppercase" style="letter-spacing:1px">${label}</div>
+        <div class="stat-num ${cls}">${val}</div>
+      </div>
+    </div>`).join('');
+
+  const badge = document.getElementById('overdueBadge');
+  document.getElementById('overdueCount').textContent = overdue;
+  badge.classList.toggle('d-none', overdue === 0);
+  badge.classList.toggle('d-inline-flex', overdue > 0);
 }
 
 function isOverdue(d) {
@@ -899,11 +804,16 @@ function isOverdue(d) {
 
 function getFiltered() {
   let list = devices.filter(d => {
-    if (activeFilter === 'in' && d.status !== 'in') return false;
-    if (activeFilter === 'out' && d.status !== 'out') return false;
-    if (activeFilter === 'overdue' && !isOverdue(d)) return false;
+    if (statusFilter === 'in' && d.status !== 'in') return false;
+    if (statusFilter === 'out' && d.status !== 'out') return false;
+    if (statusFilter === 'overdue' && !isOverdue(d)) return false;
+    if (MF_STATE.type.size && !MF_STATE.type.has(d.type || '')) return false;
+    if (MF_STATE.team.size && !MF_STATE.team.has(d.team || '')) return false;
+    if (MF_STATE.inCharge.size && !MF_STATE.inCharge.has(d.inCharge || '')) return false;
+    if (MF_STATE.tier.size && !MF_STATE.tier.has(d.tier || '')) return false;
     if (searchTerm) {
-      const hay = [d.name, d.assigned, d.holder, d.notes, d.deviceId, d.team, d.inCharge, d.personUsing, d.modelName, d.serialNo, d.imei].filter(Boolean).join(' ').toLowerCase();
+      const hay = [d.name, d.assigned, d.holder, d.notes, d.deviceId, d.team, d.inCharge, d.personUsing, d.modelName, d.serialNo, d.imei, d.tier]
+        .concat(Object.values(d.custom || {})).filter(Boolean).join(' ').toLowerCase();
       if (!hay.includes(searchTerm.toLowerCase())) return false;
     }
     return true;
@@ -927,221 +837,254 @@ function getFiltered() {
 function renderTable() {
   const tbody = document.getElementById('deviceTbody');
   const list = getFiltered();
-  document.querySelectorAll('#deviceTable thead th .sort-arrow').forEach(el => el.textContent = '');
-  const activeTh = document.querySelector(`#deviceTable thead th[data-sort="${sortState.key}"] .sort-arrow`);
-  if (activeTh) activeTh.textContent = sortState.dir === 1 ? '↑' : '↓';
+  const isAdmin = session && session.user.role === 'admin';
 
-  if (list.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
-      <svg width="34" height="34" viewBox="0 0 24 24" fill="none"><rect x="7" y="2" width="10" height="20" rx="2.5" stroke="currentColor" stroke-width="1.6"/></svg>
-      <div>${devices.length === 0 ? 'No devices yet — add the first one.' : 'Nothing matches your search or filter.'}</div>
-    </div></td></tr>`;
+  if (!list.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-faint py-5">
+      <i class="bi bi-inbox fs-1 d-block mb-2 opacity-50"></i>
+      ${devices.length === 0 ? 'No devices yet — add the first one.' : 'Nothing matches your search or filter.'}
+    </td></tr>`;
     return;
   }
-
-  tbody.innerHTML = list.map(d => rowHtml(d)).join('');
+  tbody.innerHTML = list.map(d => rowHtml(d, isAdmin)).join('');
 }
 
-function rowHtml(d) {
+function specsPreview(d) {
+  const parts = [d.modelName, d.osVersion, d.ramSize].filter(Boolean);
+  return parts.length ? parts.join(' · ') : '';
+}
+
+function rowHtml(d, isAdmin) {
   const overdue = isOverdue(d);
-  const statusPill = d.status === 'in'
-    ? `<span class="pill pill-in"><svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>Checked in</span>`
+  const statusBadge = d.status === 'in'
+    ? `<span class="badge badge-soft-success"><i class="bi bi-check-circle me-1"></i>Checked in</span>`
     : overdue
-      ? `<span class="pill pill-overdue"><svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>Overdue</span>`
-      : `<span class="pill pill-out"><svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>Checked out</span>`;
+      ? `<span class="badge badge-soft-warning"><i class="bi bi-exclamation-triangle me-1"></i>Overdue</span>`
+      : `<span class="badge badge-soft-secondary"><i class="bi bi-box-arrow-right me-1"></i>Checked out</span>`;
 
   let activity;
   if (d.status === 'out') {
-    activity = `<div class="activity-line">With <strong>${escapeHtml(d.holder || '—')}</strong></div>
-      <div class="activity-sub ${overdue ? 'overdue-tag' : ''}">${d.purpose ? escapeHtml(d.purpose) + ' · ' : ''}out ${timeAgo(d.lastCheckedOut)}${overdue ? ' (overdue)' : ''}</div>`;
+    activity = `<div class="small">With <strong>${escapeHtml(d.holder || '—')}</strong></div>
+      <div class="specs-line ${overdue ? 'text-warning' : ''}">${d.purpose ? escapeHtml(d.purpose) + ' · ' : ''}out ${timeAgo(d.lastCheckedOut)}${overdue ? ' (overdue)' : ''}</div>`;
   } else {
-    activity = `<div class="activity-line">Returned</div>
-      <div class="activity-sub">${d.lastCheckedIn ? timeAgo(d.lastCheckedIn) + ' ago' : 'never checked out'}</div>`;
+    activity = `<div class="small">Returned</div><div class="specs-line">${d.lastCheckedIn ? timeAgo(d.lastCheckedIn) + ' ago' : 'never checked out'}</div>`;
   }
 
+  const specs = specsPreview(d);
+
   return `<tr data-id="${d.id}">
+    <td>${isAdmin ? `<input type="checkbox" class="form-check-input bulk-row-cb" data-id="${d.id}" ${bulkSelected.has(d.id) ? 'checked' : ''} onclick="toggleBulkOne('${d.id}')">` : ''}</td>
     <td>
-      <div class="device-cell">
-        <div class="device-icon">${typeIconSvg(d.type)}</div>
-        <div>
-          <div class="device-name">${escapeHtml(d.name)}${d.tier ? `<span class="tier-badge">${escapeHtml(d.tier)}</span>` : ''}</div>
-          <div class="device-type">${escapeHtml(d.type || 'Other')}</div>
-        </div>
-      </div>
+      <div class="fw-semibold">${escapeHtml(d.name)}${d.tier ? `<span class="badge badge-soft-info ms-1" style="font-size:.62rem">${escapeHtml(d.tier)}</span>` : ''}</div>
+      <div class="specs-line">${escapeHtml(d.type || 'Other')}${specs ? ' · ' + escapeHtml(specs) : ''}</div>
     </td>
-    <td>${escapeHtml(d.deviceId || '—')}</td>
-    <td>${escapeHtml(d.team || '—')}</td>
+    <td class="small">${escapeHtml(d.deviceId || '—')}</td>
+    <td class="small">${escapeHtml(d.team || '—')}</td>
     <td>
-      <span class="avatar-badge" style="background:${colorFor(d.inCharge || d.assigned)}">${initialsFor(d.inCharge || d.assigned)}</span>
-      ${escapeHtml(d.inCharge || d.assigned || '—')}
+      <span class="avatar-circle me-1" style="background:${colorFor(d.inCharge || d.assigned)}">${initialsFor(d.inCharge || d.assigned)}</span>
+      <span class="small">${escapeHtml(d.inCharge || d.assigned || '—')}</span>
     </td>
-    <td>${statusPill}</td>
+    <td>${statusBadge}</td>
     <td>${activity}</td>
     <td>
-      <div class="row-actions">
+      <div class="d-flex flex-wrap gap-1">
         ${d.status === 'in'
-          ? `<button class="btn act-out" onclick="openCheckout('${d.id}')">Check out</button>`
-          : `<button class="btn act-in" onclick="checkIn('${d.id}')">Check in</button>`}
-        <button class="btn act-edit" onclick="openEdit('${d.id}')">Edit</button>
-        <button class="btn act-hist" onclick="openSpecs('${d.id}')">Specs</button>
-        <button class="btn act-hist" onclick="openHistory('${d.id}')">History</button>
-        <button class="btn act-del" onclick="openDelete('${d.id}')">Delete</button>
+          ? `<button class="btn btn-sm btn-outline-light" onclick="openCheckout('${d.id}')" title="Check out"><i class="bi bi-box-arrow-up-right"></i></button>`
+          : `<button class="btn btn-sm btn-outline-success" onclick="checkIn('${d.id}')" title="Check in"><i class="bi bi-box-arrow-in-down"></i></button>`}
+        <button class="btn btn-sm btn-outline-secondary" onclick="openEdit('${d.id}')" title="Edit"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="openSpecs('${d.id}')" title="Specs"><i class="bi bi-list-ul"></i></button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="openHistory('${d.id}')" title="History"><i class="bi bi-clock-history"></i></button>
+        ${isAdmin ? `<button class="btn btn-sm btn-outline-danger" onclick="openDelete('${d.id}')" title="Delete"><i class="bi bi-trash"></i></button>` : ''}
       </div>
     </td>
   </tr>`;
 }
 
 /* =====================================================================
-   ACTIONS — add / checkout / checkin / edit / delete
+   MULTI-SELECT FILTER DROPDOWNS
    ===================================================================== */
-document.getElementById('toggleAddBtn').onclick = () => {
-  document.getElementById('addPanel').classList.toggle('open');
-};
-document.getElementById('cancelAddBtn').onclick = () => {
-  document.getElementById('addPanel').classList.remove('open');
-};
+function populateFilterDropdowns() {
+  const fields = { type: 'type', team: 'team', inCharge: 'inCharge', tier: 'tier' };
+  Object.keys(fields).forEach(key => {
+    const menu = document.getElementById('mf-' + key + '-menu');
+    let values;
+    if (key === 'type' || key === 'team' || key === 'tier') {
+      values = [...new Set([...(serverConfig.options[key] || []), ...devices.map(d => d[key]).filter(Boolean)])].sort();
+    } else {
+      values = [...new Set(devices.map(d => d[key]).filter(Boolean))].sort();
+    }
+    if (!values.length) { menu.innerHTML = '<div class="text-faint small px-2">No values yet</div>'; return; }
+    menu.innerHTML = values.map(v => `
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="mfcb-${key}-${slug(v)}" ${MF_STATE[key].has(v) ? 'checked' : ''}
+          onchange="toggleMF('${key}','${escapeAttr(v)}')">
+        <label class="form-check-label small" for="mfcb-${key}-${slug(v)}">${escapeHtml(v)}</label>
+      </div>`).join('');
+  });
+}
+function toggleMF(key, val) {
+  if (MF_STATE[key].has(val)) MF_STATE[key].delete(val); else MF_STATE[key].add(val);
+  const badge = document.getElementById('mf-' + key + '-badge');
+  const n = MF_STATE[key].size;
+  badge.textContent = n; badge.classList.toggle('d-none', n === 0);
+  renderTable();
+}
+function clearAllFilters() {
+  Object.keys(MF_STATE).forEach(k => MF_STATE[k].clear());
+  document.querySelectorAll('.mono.ms-1.badge-soft-info').forEach(b => {});
+  ['type','team','inCharge','tier'].forEach(k => {
+    const badge = document.getElementById('mf-' + k + '-badge');
+    if (badge) { badge.textContent = ''; badge.classList.add('d-none'); }
+  });
+  document.getElementById('searchInput').value = '';
+  searchTerm = '';
+  document.querySelectorAll('#statusFilterTabs button').forEach(b => b.classList.remove('active'));
+  document.querySelector('#statusFilterTabs button[data-filter="all"]').classList.add('active');
+  statusFilter = 'all';
+  populateFilterDropdowns();
+  renderTable();
+}
+function slug(s) { return (s || '').toString().replace(/[^a-z0-9]/gi, '_').toLowerCase(); }
 
-document.getElementById('submitAddBtn').onclick = async () => {
-  const name = document.getElementById('deviceName').value.trim();
-  const type = document.getElementById('deviceType').value;
-  const assigned = document.getElementById('deviceOwner').value.trim();
-  const notes = document.getElementById('deviceNotes').value.trim();
-  const deviceId = document.getElementById('deviceIdField').value.trim();
-  const team = document.getElementById('deviceTeam').value.trim();
-  const inCharge = document.getElementById('deviceInCharge').value.trim();
-  const personUsing = document.getElementById('devicePersonUsing').value.trim();
-  const tier = document.getElementById('deviceTier').value.trim();
-  const modelName = document.getElementById('deviceModelName').value.trim();
-  const osVersion = document.getElementById('deviceOsVersion').value.trim();
-  const gpu = document.getElementById('deviceGpu').value.trim();
-  const ramSize = document.getElementById('deviceRam').value.trim();
-  const internalMemory = document.getElementById('deviceInternalMemory').value.trim();
-  const serialNo = document.getElementById('deviceSerialNo').value.trim();
-  const imei = document.getElementById('deviceImei').value.trim();
-  if (!name || !assigned) return toast('Device name and owner are required.', true);
+/* =====================================================================
+   ADD / EDIT DEVICE
+   ===================================================================== */
+function populateFieldSelects() {
+  const build = (id, opts) => {
+    const el = document.getElementById(id);
+    const current = el.value;
+    el.innerHTML = opts.map(o => `<option value="${escapeAttr(o)}">${escapeHtml(o)}</option>`).join('');
+    if (opts.includes(current)) el.value = current;
+  };
+  build('f-type', serverConfig.options.type || []);
+  build('f-team', serverConfig.options.team || []);
+  build('f-tier', ['', ...(serverConfig.options.tier || [])]);
+}
+
+function renderCustomFieldsForm(device) {
+  const section = document.getElementById('customFieldsSection');
+  const fields = serverConfig.customFields || [];
+  if (!fields.length) { section.innerHTML = ''; return; }
+  section.innerHTML = `<div class="field-section-label">Custom fields</div><div class="row g-3">` +
+    fields.map(f => `
+      <div class="col-md-4">
+        <label class="form-label small text-faint mono">${escapeHtml(f.label)}</label>
+        <input class="form-control" id="f-custom-${escapeAttr(f.key)}" value="${escapeAttr((device && device.custom && device.custom[f.key]) || '')}">
+      </div>`).join('') + `</div>`;
+}
+
+function openAddDevice() {
+  pendingEditId = null;
+  document.getElementById('deviceModalTitle').textContent = 'Add device';
+  ['name','deviceId','assigned','inCharge','personUsing','modelName','osVersion','gpu','ramSize','internalMemory','serialNo','imei','notes']
+    .forEach(k => document.getElementById('f-' + k).value = '');
+  populateFieldSelects();
+  document.getElementById('f-tier').value = '';
+  renderCustomFieldsForm(null);
+}
+
+function openEdit(id) {
+  const d = devices.find(x => x.id === id);
+  if (!d) return;
+  pendingEditId = id;
+  document.getElementById('deviceModalTitle').textContent = 'Edit ' + d.name;
+  document.getElementById('f-name').value = d.name || '';
+  populateFieldSelects();
+  document.getElementById('f-type').value = d.type || 'Phone';
+  document.getElementById('f-deviceId').value = d.deviceId || '';
+  document.getElementById('f-assigned').value = d.assigned || '';
+  document.getElementById('f-team').value = d.team || '';
+  document.getElementById('f-inCharge').value = d.inCharge || '';
+  document.getElementById('f-personUsing').value = d.personUsing || '';
+  document.getElementById('f-tier').value = d.tier || '';
+  document.getElementById('f-modelName').value = d.modelName || '';
+  document.getElementById('f-osVersion').value = d.osVersion || '';
+  document.getElementById('f-gpu').value = d.gpu || '';
+  document.getElementById('f-ramSize').value = d.ramSize || '';
+  document.getElementById('f-internalMemory').value = d.internalMemory || '';
+  document.getElementById('f-serialNo').value = d.serialNo || '';
+  document.getElementById('f-imei').value = d.imei || '';
+  document.getElementById('f-notes').value = d.notes || '';
+  renderCustomFieldsForm(d);
+  new bootstrap.Modal(document.getElementById('deviceModal')).show();
+}
+
+async function saveDevice() {
+  const name = document.getElementById('f-name').value.trim();
+  const assigned = document.getElementById('f-assigned').value.trim();
+  if (!name || !assigned) { toast('Device name and owner are required.', true); return; }
+
+  const custom = {};
+  (serverConfig.customFields || []).forEach(f => {
+    const el = document.getElementById('f-custom-' + f.key);
+    if (el) custom[f.key] = el.value.trim();
+  });
+
+  const payload = {
+    name, assigned,
+    type: document.getElementById('f-type').value,
+    deviceId: document.getElementById('f-deviceId').value.trim(),
+    team: document.getElementById('f-team').value,
+    inCharge: document.getElementById('f-inCharge').value.trim(),
+    personUsing: document.getElementById('f-personUsing').value.trim(),
+    tier: document.getElementById('f-tier').value,
+    modelName: document.getElementById('f-modelName').value.trim(),
+    osVersion: document.getElementById('f-osVersion').value.trim(),
+    gpu: document.getElementById('f-gpu').value.trim(),
+    ramSize: document.getElementById('f-ramSize').value.trim(),
+    internalMemory: document.getElementById('f-internalMemory').value.trim(),
+    serialNo: document.getElementById('f-serialNo').value.trim(),
+    imei: document.getElementById('f-imei').value.trim(),
+    notes: document.getElementById('f-notes').value.trim(),
+    custom
+  };
+
+  const btn = document.getElementById('deviceSaveBtn');
+  btn.disabled = true;
   try {
-    await apiFetch('/api/devices', {
-      method: 'POST',
-      body: JSON.stringify({ name, type, assigned, notes, deviceId, team, inCharge, personUsing, tier, modelName, osVersion, gpu, ramSize, internalMemory, serialNo, imei })
-    });
-    ['deviceName','deviceOwner','deviceNotes','deviceIdField','deviceTeam','deviceInCharge','devicePersonUsing','deviceTier','deviceModelName','deviceOsVersion','deviceGpu','deviceRam','deviceInternalMemory','deviceSerialNo','deviceImei']
-      .forEach(id => document.getElementById(id).value = '');
-    document.getElementById('addPanel').classList.remove('open');
-    toast('Device added.');
-    loadDevices();
-  } catch (err) { toast(err.message, true); }
-};
+    if (pendingEditId) {
+      await apiFetch('/api/devices/' + pendingEditId, { method: 'PUT', body: JSON.stringify(payload) });
+      toast('Saved.');
+    } else {
+      await apiFetch('/api/devices', { method: 'POST', body: JSON.stringify(payload) });
+      toast('Device added.');
+    }
+    bootstrap.Modal.getInstance(document.getElementById('deviceModal'))?.hide();
+    await loadDevices();
+  } catch (e) { toast(e.message, true); }
+  btn.disabled = false;
+}
 
+/* =====================================================================
+   CHECKOUT / CHECKIN
+   ===================================================================== */
 function openCheckout(id) {
   pendingCheckoutId = id;
   const d = devices.find(x => x.id === id);
   document.getElementById('checkoutDeviceLabel').textContent = d.name;
   document.getElementById('checkoutHolder').value = '';
   document.getElementById('checkoutPurpose').value = '';
-  openModal('checkoutModal');
+  new bootstrap.Modal(document.getElementById('checkoutModal')).show();
 }
-document.getElementById('confirmCheckoutBtn').onclick = async () => {
+async function confirmCheckout() {
   const holder = document.getElementById('checkoutHolder').value.trim();
+  if (!holder) { toast('Enter who is taking the device.', true); return; }
   const purpose = document.getElementById('checkoutPurpose').value.trim();
-  if (!holder) return toast('Enter who is taking the device.', true);
   try {
     await apiFetch(`/api/devices/${pendingCheckoutId}/checkout`, { method: 'POST', body: JSON.stringify({ holder, purpose }) });
-    closeModal('checkoutModal');
+    bootstrap.Modal.getInstance(document.getElementById('checkoutModal'))?.hide();
     toast('Checked out to ' + holder + '.');
-    loadDevices();
-  } catch (err) { toast(err.message, true); }
-};
-
+    await loadDevices();
+  } catch (e) { toast(e.message, true); }
+}
 async function checkIn(id) {
-  try {
-    await apiFetch(`/api/devices/${id}/checkin`, { method: 'POST' });
-    toast('Checked in.');
-    loadDevices();
-  } catch (err) { toast(err.message, true); }
+  try { await apiFetch(`/api/devices/${id}/checkin`, { method: 'POST' }); toast('Checked in.'); await loadDevices(); }
+  catch (e) { toast(e.message, true); }
 }
 
-function openEdit(id) {
-  pendingEditId = id;
-  const d = devices.find(x => x.id === id);
-  document.getElementById('editName').value = d.name || '';
-  document.getElementById('editType').value = d.type || 'Phone';
-  document.getElementById('editDeviceId').value = d.deviceId || '';
-  document.getElementById('editOwner').value = d.assigned || '';
-  document.getElementById('editTeam').value = d.team || '';
-  document.getElementById('editInCharge').value = d.inCharge || '';
-  document.getElementById('editPersonUsing').value = d.personUsing || '';
-  document.getElementById('editTier').value = d.tier || '';
-  document.getElementById('editModelName').value = d.modelName || '';
-  document.getElementById('editOsVersion').value = d.osVersion || '';
-  document.getElementById('editRam').value = d.ramSize || '';
-  document.getElementById('editInternalMemory').value = d.internalMemory || '';
-  document.getElementById('editGpu').value = d.gpu || '';
-  document.getElementById('editSerialNo').value = d.serialNo || '';
-  document.getElementById('editImei').value = d.imei || '';
-  document.getElementById('editNotes').value = d.notes || '';
-  openModal('editModal');
-}
-document.getElementById('confirmEditBtn').onclick = async () => {
-  const name = document.getElementById('editName').value.trim();
-  const type = document.getElementById('editType').value;
-  const assigned = document.getElementById('editOwner').value.trim();
-  const notes = document.getElementById('editNotes').value.trim();
-  const deviceId = document.getElementById('editDeviceId').value.trim();
-  const team = document.getElementById('editTeam').value.trim();
-  const inCharge = document.getElementById('editInCharge').value.trim();
-  const personUsing = document.getElementById('editPersonUsing').value.trim();
-  const tier = document.getElementById('editTier').value.trim();
-  const modelName = document.getElementById('editModelName').value.trim();
-  const osVersion = document.getElementById('editOsVersion').value.trim();
-  const ramSize = document.getElementById('editRam').value.trim();
-  const internalMemory = document.getElementById('editInternalMemory').value.trim();
-  const gpu = document.getElementById('editGpu').value.trim();
-  const serialNo = document.getElementById('editSerialNo').value.trim();
-  const imei = document.getElementById('editImei').value.trim();
-  if (!name || !assigned) return toast('Device name and owner are required.', true);
-  try {
-    await apiFetch(`/api/devices/${pendingEditId}`, {
-      method: 'PUT',
-      body: JSON.stringify({ name, type, assigned, notes, deviceId, team, inCharge, personUsing, tier, modelName, osVersion, ramSize, internalMemory, gpu, serialNo, imei })
-    });
-    closeModal('editModal');
-    toast('Saved.');
-    loadDevices();
-  } catch (err) { toast(err.message, true); }
-};
-
-function openDelete(id) {
-  pendingDeleteId = id;
-  const d = devices.find(x => x.id === id);
-  document.getElementById('deleteDeviceLabel').textContent = `Delete "${d.name}"? This can't be undone.`;
-  openModal('deleteModal');
-}
-document.getElementById('confirmDeleteBtn').onclick = async () => {
-  try {
-    await apiFetch(`/api/devices/${pendingDeleteId}`, { method: 'DELETE' });
-    closeModal('deleteModal');
-    toast('Device deleted.');
-    loadDevices();
-  } catch (err) { toast(err.message, true); }
-};
-
-function openHistory(id) {
-  const d = devices.find(x => x.id === id);
-  document.getElementById('historyDeviceLabel').textContent = `${d.name} · owned by ${d.assigned || '—'}`;
-  const list = document.getElementById('historyList');
-  const entries = (d.history || []).slice().reverse();
-  if (entries.length === 0) {
-    list.innerHTML = '<div class="history-item">No history yet.</div>';
-  } else {
-    list.innerHTML = entries.map(h => `
-      <div class="history-item">
-        <div class="h-detail">${escapeHtml(h.detail || h.action)}</div>
-        <div class="h-meta">${escapeHtml(h.by || 'Unknown')} · ${formatDate(h.at)}</div>
-      </div>`).join('');
-  }
-  openModal('historyModal');
-}
-
+/* =====================================================================
+   SPECS / HISTORY / DELETE
+   ===================================================================== */
 function openSpecs(id) {
   const d = devices.find(x => x.id === id);
   document.getElementById('specsDeviceLabel').textContent = `${d.name}${d.deviceId ? ' · ' + d.deviceId : ''}`;
@@ -1150,46 +1093,174 @@ function openSpecs(id) {
     ['Model name', d.modelName], ['OS version', d.osVersion], ['RAM size', d.ramSize], ['Internal memory', d.internalMemory],
     ['GPU', d.gpu], ['Serial no.', d.serialNo], ['IMEI', d.imei], ['Notes', d.notes]
   ];
+  (serverConfig.customFields || []).forEach(f => fields.push([f.label, d.custom && d.custom[f.key]]));
   document.getElementById('specsGrid').innerHTML = fields.map(([label, value]) => `
-    <div class="specs-item">
-      <div class="specs-label">${escapeHtml(label)}</div>
-      <div class="specs-value">${escapeHtml(value || '—')}</div>
+    <div class="col-6">
+      <div class="text-faint mono text-uppercase" style="font-size:.62rem;letter-spacing:1px">${escapeHtml(label)}</div>
+      <div class="fw-semibold small">${escapeHtml(value || '—')}</div>
     </div>`).join('');
-  openModal('specsModal');
+  new bootstrap.Modal(document.getElementById('specsModal')).show();
+}
+
+function openHistory(id) {
+  const d = devices.find(x => x.id === id);
+  document.getElementById('historyDeviceLabel').textContent = `${d.name} · owned by ${d.assigned || '—'}`;
+  const entries = (d.history || []).slice().reverse();
+  document.getElementById('historyList').innerHTML = entries.length
+    ? entries.map(h => `
+      <div class="border-bottom border-secondary-subtle pb-2">
+        <div class="small">${escapeHtml(h.detail || h.action)}</div>
+        <div class="text-faint mono" style="font-size:.68rem">${escapeHtml(h.by || 'Unknown')} · ${formatDate(h.at)}</div>
+      </div>`).join('')
+    : '<div class="text-faint small">No history yet.</div>';
+  new bootstrap.Modal(document.getElementById('historyModal')).show();
+}
+
+function openDelete(id) {
+  pendingDeleteId = id;
+  const d = devices.find(x => x.id === id);
+  document.getElementById('deleteDeviceLabel').textContent = `Delete "${d.name}"? This can't be undone.`;
+  new bootstrap.Modal(document.getElementById('deleteModal')).show();
+}
+async function confirmDelete() {
+  try {
+    await apiFetch(`/api/devices/${pendingDeleteId}`, { method: 'DELETE' });
+    bootstrap.Modal.getInstance(document.getElementById('deleteModal'))?.hide();
+    toast('Device deleted.');
+    await loadDevices();
+  } catch (e) { toast(e.message, true); }
 }
 
 /* =====================================================================
-   TOOLBAR — search / filter / sort
+   BULK SELECTION (admin)
    ===================================================================== */
-document.getElementById('searchInput').addEventListener('input', e => { searchTerm = e.target.value; renderTable(); });
-document.getElementById('filterTabs').addEventListener('click', e => {
-  const btn = e.target.closest('button[data-filter]');
-  if (!btn) return;
-  activeFilter = btn.dataset.filter;
-  document.querySelectorAll('#filterTabs button').forEach(b => b.classList.toggle('active', b === btn));
+function toggleBulkOne(id) {
+  if (bulkSelected.has(id)) bulkSelected.delete(id); else bulkSelected.add(id);
+  updateBulkBar();
+}
+function toggleSelectAll(e) {
+  const ids = getFiltered().map(d => d.id);
+  if (e.target.checked) ids.forEach(id => bulkSelected.add(id));
+  else ids.forEach(id => bulkSelected.delete(id));
   renderTable();
-});
-document.querySelectorAll('#deviceTable thead th[data-sort]').forEach(th => {
-  th.addEventListener('click', () => {
-    const key = th.dataset.sort;
-    if (sortState.key === key) sortState.dir *= -1; else { sortState.key = key; sortState.dir = 1; }
-    renderTable();
+  updateBulkBar();
+}
+function clearBulkSelection() { bulkSelected.clear(); renderTable(); updateBulkBar(); }
+function updateBulkBar() {
+  const bar = document.getElementById('bulkBar');
+  document.getElementById('bulkCount').textContent = bulkSelected.size + ' selected';
+  bar.classList.toggle('show', bulkSelected.size > 0);
+}
+async function bulkDelete() {
+  if (!bulkSelected.size) return;
+  if (!confirm(`Delete ${bulkSelected.size} device(s)? This can't be undone.`)) return;
+  try {
+    await apiFetch('/api/devices/bulk-delete', { method: 'POST', body: JSON.stringify({ ids: [...bulkSelected] }) });
+    toast(bulkSelected.size + ' device(s) deleted.');
+    clearBulkSelection();
+    await loadDevices();
+  } catch (e) { toast(e.message, true); }
+}
+async function bulkCheckin() {
+  if (!bulkSelected.size) return;
+  let ok = 0;
+  for (const id of bulkSelected) {
+    try { await apiFetch(`/api/devices/${id}/checkin`, { method: 'POST' }); ok++; } catch (e) {}
+  }
+  toast(ok + ' device(s) checked in.');
+  clearBulkSelection();
+  await loadDevices();
+}
+
+/* =====================================================================
+   ADMIN PANEL — fields / custom fields / admins / backup
+   ===================================================================== */
+function renderAdminDraft() {
+  ['type','team','tier'].forEach(key => {
+    const wrap = document.getElementById('chips-' + key);
+    wrap.innerHTML = (adminDraft.options[key] || []).map(v => `
+      <span class="badge badge-soft-secondary d-inline-flex align-items-center">${escapeHtml(v)}
+        <i class="bi bi-x chip-remove" onclick="removeOption('${key}','${escapeAttr(v)}')"></i></span>`).join('') || '<span class="text-faint small">None yet</span>';
   });
-});
+  const customWrap = document.getElementById('chips-custom');
+  customWrap.innerHTML = (adminDraft.customFields || []).map(f => `
+    <div class="d-flex align-items-center justify-content-between bg-black bg-opacity-25 rounded px-2 py-1">
+      <span class="small">${escapeHtml(f.label)} <span class="text-faint mono" style="font-size:.65rem">(${escapeHtml(f.key)})</span></span>
+      <i class="bi bi-x chip-remove" onclick="removeCustomField('${escapeAttr(f.key)}')"></i>
+    </div>`).join('') || '<span class="text-faint small">No custom fields yet</span>';
+  const adminsWrap = document.getElementById('chips-admins');
+  adminsWrap.innerHTML = (adminDraft.admins || []).map(a => `
+    <div class="d-flex align-items-center justify-content-between bg-black bg-opacity-25 rounded px-2 py-1">
+      <span class="small">${escapeHtml(a)}</span>
+      <i class="bi bi-x chip-remove" onclick="removeAdmin('${escapeAttr(a)}')"></i>
+    </div>`).join('') || '<span class="text-faint small">No admins yet</span>';
+}
+function addOption(key) {
+  const inp = document.getElementById('new-opt-' + key);
+  const val = inp.value.trim();
+  if (!val) return;
+  adminDraft.options[key] = adminDraft.options[key] || [];
+  if (!adminDraft.options[key].some(v => v.toLowerCase() === val.toLowerCase())) adminDraft.options[key].push(val);
+  inp.value = '';
+  renderAdminDraft();
+}
+function removeOption(key, val) {
+  adminDraft.options[key] = (adminDraft.options[key] || []).filter(v => v !== val);
+  renderAdminDraft();
+}
+function addCustomField() {
+  const inp = document.getElementById('new-custom-label');
+  const label = inp.value.trim();
+  if (!label) return;
+  const key = 'cf_' + label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  if (!key || key === 'cf_') { toast('Please use a label with letters or numbers.', true); return; }
+  if ((adminDraft.customFields || []).some(f => f.key === key)) { toast('A field with that name already exists.', true); return; }
+  adminDraft.customFields = adminDraft.customFields || [];
+  adminDraft.customFields.push({ key, label });
+  inp.value = '';
+  renderAdminDraft();
+}
+function removeCustomField(key) {
+  adminDraft.customFields = (adminDraft.customFields || []).filter(f => f.key !== key);
+  renderAdminDraft();
+}
+function addAdmin() {
+  const inp = document.getElementById('new-admin-email');
+  const val = inp.value.trim().toLowerCase();
+  if (!val || !val.includes('@')) { toast('Enter a valid email.', true); return; }
+  adminDraft.admins = adminDraft.admins || [];
+  if (!adminDraft.admins.some(a => a.toLowerCase() === val)) adminDraft.admins.push(val);
+  inp.value = '';
+  renderAdminDraft();
+}
+function removeAdmin(email) {
+  if (email.toLowerCase() === (session.user.email || '').toLowerCase()) {
+    toast("You can't remove yourself from the admin list.", true); return;
+  }
+  adminDraft.admins = (adminDraft.admins || []).filter(a => a !== email);
+  renderAdminDraft();
+}
+async function saveAdminConfig() {
+  try {
+    serverConfig = await apiFetch('/api/config', { method: 'PUT', body: JSON.stringify(adminDraft) });
+    populateFieldSelects();
+    populateFilterDropdowns();
+    toast('Admin settings saved ✓');
+  } catch (e) { toast(e.message, true); }
+}
 
 /* =====================================================================
    BACKUP / RESTORE
    ===================================================================== */
-document.getElementById('backupBtn').onclick = () => {
+function exportBackup() {
   const blob = new Blob([JSON.stringify(devices, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = `qa-device-inventory-${new Date().toISOString().slice(0,10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
-};
-document.getElementById('restoreBtn').onclick = () => document.getElementById('restoreFile').click();
-document.getElementById('restoreFile').addEventListener('change', e => {
+}
+function handleRestoreFile(e) {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
@@ -1200,54 +1271,30 @@ document.getElementById('restoreFile').addEventListener('change', e => {
       if (!confirm(`Restore ${data.length} devices? This replaces the current inventory.`)) return;
       await apiFetch('/api/devices/restore', { method: 'POST', body: JSON.stringify({ data }) });
       toast('Restore complete.');
-      loadDevices();
+      await loadDevices();
     } catch (err) { toast(err.message || 'Could not read backup file.', true); }
   };
   reader.readAsText(file);
   e.target.value = '';
-});
+}
 
 /* =====================================================================
-   MODALS / TOASTS / THEME / UTIL
+   UTIL
    ===================================================================== */
-function openModal(id) { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-document.querySelectorAll('.modal').forEach(m => m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); }));
-
 function toast(msg, isErr) {
   const wrap = document.getElementById('toastWrap');
   const el = document.createElement('div');
-  el.className = 'toast' + (isErr ? ' err' : '');
-  el.textContent = msg;
+  el.className = 'toast align-items-center border-0 ' + (isErr ? 'text-bg-danger' : 'text-bg-dark');
+  el.setAttribute('role', 'alert');
+  el.innerHTML = `<div class="d-flex"><div class="toast-body">${escapeHtml(msg)}</div>
+    <button class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>`;
   wrap.appendChild(el);
-  setTimeout(() => el.remove(), 3800);
+  const t = new bootstrap.Toast(el, { delay: 3800 });
+  t.show();
+  el.addEventListener('hidden.bs.toast', () => el.remove());
 }
 
-function toggleTheme() {
-  const cur = document.documentElement.getAttribute('data-theme');
-  const next = cur === 'light' ? 'dark' : 'light';
-  document.documentElement.setAttribute('data-theme', next === 'dark' ? '' : 'light');
-  localStorage.setItem('qa_theme', next);
-  renderTopActions();
-}
-function initTheme() {
-  const saved = localStorage.getItem('qa_theme') || 'dark';
-  if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
-}
-function themeIconSvg() {
-  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
-  return isLight
-    ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z" fill="currentColor"/></svg>`
-    : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4.5" fill="currentColor"/><g stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="12" y1="1.5" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22.5"/><line x1="1.5" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22.5" y2="12"/></g></svg>`;
-}
-
-function typeIconSvg(type) {
-  if (type === 'Tablet') return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="16" rx="2.3" stroke="#7c3aed" stroke-width="1.7"/></svg>`;
-  if (type === 'Emulator') return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="13" rx="1.8" stroke="#7c3aed" stroke-width="1.7"/><path d="M8 21h8" stroke="#7c3aed" stroke-width="1.7" stroke-linecap="round"/></svg>`;
-  return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="7" y="2" width="10" height="20" rx="2.3" stroke="#7c3aed" stroke-width="1.7"/></svg>`;
-}
-
-const PALETTE = ['#7c3aed','#4a90d9','#c77dd9','#e0a840','#e2564d','#3fb6c1','#8d7de0'];
+const PALETTE = ['#7c3aed','#06b6d4','#c77dd9','#e0a840','#e2564d','#3fb6c1','#8d7de0','#10b981'];
 function colorFor(name) {
   if (!name) return '#5c6c81';
   let h = 0; for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
@@ -1257,11 +1304,10 @@ function initialsFor(name) {
   if (!name) return '?';
   return name.trim().split(/\s+/).map(s => s[0]).slice(0,2).join('').toUpperCase();
 }
-
 function escapeHtml(str) {
   return (str || '').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
-
+function escapeAttr(str) { return escapeHtml(str).replace(/`/g, '&#96;'); }
 function timeAgo(dateStr) {
   if (!dateStr) return '—';
   const diffMs = Date.now() - new Date(dateStr).getTime();
