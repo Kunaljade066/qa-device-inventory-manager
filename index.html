@@ -765,12 +765,7 @@ window.addEventListener('load', () => {
 
   document.getElementById('searchInput').addEventListener('input', e => { searchTerm = e.target.value; renderTable(); });
   document.querySelectorAll('#statusFilterTabs button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('#statusFilterTabs button').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      statusFilter = btn.dataset.filter;
-      renderTable();
-    });
+    btn.addEventListener('click', () => setStatusFilter(btn.dataset.filter));
   });
   document.querySelectorAll('#deviceTable thead th[data-sort]').forEach(th => {
     th.addEventListener('click', () => {
@@ -946,23 +941,51 @@ function renderStats() {
   const outCount = total - inCount;
   const overdue = devices.filter(isOverdue).length;
   const cards = [
-    ['Total devices', total, 'text-body-emphasis'],
-    ['Checked in', inCount, 'text-success'],
-    ['Checked out', outCount, 'text-body-emphasis'],
-    ['Overdue (48h+)', overdue, 'text-warning']
+    ['stat-total', 'all', 'Total devices', total, 'text-body-emphasis'],
+    ['stat-in', 'in', 'Checked in', inCount, 'text-success'],
+    ['stat-out', 'out', 'Checked out', outCount, 'text-body-emphasis'],
+    ['stat-overdue', 'overdue', 'Overdue (48h+)', overdue, 'text-warning']
   ];
-  document.getElementById('statsRow').innerHTML = cards.map(([label, val, cls]) => `
+  document.getElementById('statsRow').innerHTML = cards.map(([id, filter, label, val, cls]) => `
     <div class="col-6 col-lg-3">
-      <div class="stat-card card-glow">
+      <div class="stat-card card-glow cursor-pointer" onclick="setStatusFilter('${filter}')" title="Show ${escapeAttr(label.toLowerCase())}">
         <div class="text-faint mono small text-uppercase" style="letter-spacing:1px">${label}</div>
-        <div class="stat-num ${cls}">${val}</div>
+        <div class="stat-num ${cls}" id="${id}">0</div>
       </div>
     </div>`).join('');
+  cards.forEach(([id, , , val]) => countUp(document.getElementById(id), val, 900));
 
   const badge = document.getElementById('overdueBadge');
   document.getElementById('overdueCount').textContent = overdue;
   badge.classList.toggle('d-none', overdue === 0);
   badge.classList.toggle('d-inline-flex', overdue > 0);
+}
+
+// Animates a stat number counting up from 0 to its target — same pattern
+// BugPulse used for its dashboard counters. Runs on every render, so the
+// numbers visibly tick up again each time the data refreshes.
+function countUp(el, target, duration) {
+  if (!el) return;
+  if (!target) { el.textContent = '0'; return; }
+  const start = performance.now();
+  const easeOut = t => 1 - Math.pow(1 - t, 3);
+  function tick(now) {
+    const t = Math.min((now - start) / duration, 1);
+    el.textContent = Math.round(easeOut(t) * target);
+    if (t < 1) requestAnimationFrame(tick);
+    else el.textContent = target;
+  }
+  requestAnimationFrame(tick);
+}
+
+// Shared by the status tabs AND the clickable stat cards — tapping "Checked
+// out", "Overdue", etc. actually filters the table to that data instead of
+// just being a static number.
+function setStatusFilter(filter) {
+  statusFilter = filter;
+  document.querySelectorAll('#statusFilterTabs button').forEach(b => b.classList.toggle('active', b.dataset.filter === filter));
+  renderTable();
+  document.getElementById('deviceTable')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function isOverdue(d) {
@@ -1061,7 +1084,7 @@ function rowHtml(d, isAdmin) {
     <td>
       <div class="d-flex flex-wrap gap-1">
         ${d.status === 'in'
-          ? `<button class="btn btn-sm btn-outline-light" onclick="openCheckout('${d.id}')" title="Check out"><i class="bi bi-box-arrow-up-right"></i></button>`
+          ? `<button class="btn btn-sm btn-outline-secondary" onclick="openCheckout('${d.id}')" title="Check out"><i class="bi bi-box-arrow-up-right"></i></button>`
           : `<button class="btn btn-sm btn-outline-success" onclick="checkIn('${d.id}')" title="Check in"><i class="bi bi-box-arrow-in-down"></i></button>`}
         <button class="btn btn-sm btn-outline-secondary" onclick="openEdit('${d.id}')" title="Edit"><i class="bi bi-pencil"></i></button>
         <button class="btn btn-sm btn-outline-secondary" onclick="openSpecs('${d.id}')" title="Specs"><i class="bi bi-list-ul"></i></button>
